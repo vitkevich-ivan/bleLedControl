@@ -32,11 +32,11 @@ describe("hexToRgb", () => {
     expect(srgbToLedRgb([0, 0, 255])).toEqual([0, 0, 255]);
   });
 
-  it("reduces the overpowered blue channel in purple", () => {
+  it("keeps purple channels unchanged at 100% balance", () => {
     const linearPurple = srgbToLedRgb(hexToRgb("#af52de"));
     expect(linearPurple).toEqual([109, 22, 186]);
-    expect(applyChannelBalance(linearPurple, { red: 100, green: 100, blue: 55 }))
-      .toEqual([109, 22, 102]);
+    expect(applyChannelBalance(linearPurple, { red: 100, green: 100, blue: 100 }))
+      .toEqual(linearPurple);
   });
 
   it("clamps boosted channel values", () => {

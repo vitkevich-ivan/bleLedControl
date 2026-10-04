@@ -123,7 +123,7 @@ app.innerHTML = `
           <span class="eyebrow">Баланс каналов</span>
           <label class="compact-range red-channel"><span>Красный <output id="red-gain-value">100%</output></span><input id="red-gain" type="range" min="25" max="150" value="100" /></label>
           <label class="compact-range green-channel"><span>Зелёный <output id="green-gain-value">100%</output></span><input id="green-gain" type="range" min="25" max="150" value="100" /></label>
-          <label class="compact-range blue-channel"><span>Синий <output id="blue-gain-value">55%</output></span><input id="blue-gain" type="range" min="25" max="150" value="55" /></label>
+          <label class="compact-range blue-channel"><span>Синий <output id="blue-gain-value">100%</output></span><input id="blue-gain" type="range" min="25" max="150" value="100" /></label>
           <button id="reset-balance" class="text-button">Сбросить баланс</button>
         </div>
         <div class="calibration">
@@ -146,7 +146,7 @@ app.innerHTML = `
         <button id="clear-log" class="text-button">Очистить журнал</button>
       </details>
       <section class="card about">
-        <strong>Luma BLE <span>v0.2.4</span></strong>
+        <strong>Luma BLE <span>v0.2.5</span></strong>
         <p>Работает локально. Команды и звук не отправляются на сервер.</p>
       </section>
     </div>
@@ -255,7 +255,7 @@ function readSettings(): SavedSettings | undefined {
 
 function saveSettings() {
   const settings: SavedSettings = {
-    version: 6,
+    version: 7,
     color: $<HTMLInputElement>("#color").value,
     brightness: $<HTMLInputElement>("#brightness").value,
     speed: $<HTMLInputElement>("#speed").value,
@@ -286,13 +286,15 @@ function restoreSettings() {
   $<HTMLInputElement>("#speed").value = saved.speed || "50";
   $<HTMLInputElement>("#sensitivity").value = saved.sensitivity || "15";
   $<HTMLSelectElement>("#protocol").value = saved.protocol || "auto";
-  const rgbOrder = saved.version === 6 ? (saved.rgbOrder || "RBG") : "RBG";
+  const hasCurrentColorSettings = saved.version === 6 || saved.version === 7;
+  const rgbOrder = hasCurrentColorSettings ? (saved.rgbOrder || "RBG") : "RBG";
   $<HTMLSelectElement>("#rgb-order").value = rgbOrder;
   $<HTMLInputElement>("#pixels").value = saved.pixels || "100";
-  $<HTMLInputElement>("#color-correction").checked = saved.version === 6 ? saved.colorCorrection !== false : true;
-  $<HTMLInputElement>("#red-gain").value = saved.version === 6 ? (saved.redGain || "100") : "100";
-  $<HTMLInputElement>("#green-gain").value = saved.version === 6 ? (saved.greenGain || "100") : "100";
-  $<HTMLInputElement>("#blue-gain").value = saved.version === 6 ? (saved.blueGain || "55") : "55";
+  $<HTMLInputElement>("#color-correction").checked = hasCurrentColorSettings ? saved.colorCorrection !== false : true;
+  $<HTMLInputElement>("#red-gain").value = hasCurrentColorSettings ? (saved.redGain || "100") : "100";
+  $<HTMLInputElement>("#green-gain").value = hasCurrentColorSettings ? (saved.greenGain || "100") : "100";
+  const savedBlueGain = hasCurrentColorSettings ? (saved.blueGain || "100") : "100";
+  $<HTMLInputElement>("#blue-gain").value = saved.version === 6 && savedBlueGain === "55" ? "100" : savedBlueGain;
   updateBalanceReadouts();
   $("#color-value").textContent = $<HTMLInputElement>("#color").value.toUpperCase();
   updateRgbReadout();
@@ -602,7 +604,7 @@ for (const channel of ["red", "green", "blue"] as const) {
 $("#reset-balance").addEventListener("click", () => {
   $<HTMLInputElement>("#red-gain").value = "100";
   $<HTMLInputElement>("#green-gain").value = "100";
-  $<HTMLInputElement>("#blue-gain").value = "55";
+  $<HTMLInputElement>("#blue-gain").value = "100";
   updateBalanceReadouts();
   saveSettings();
   if (controller.connected) sendBalancedColor();
