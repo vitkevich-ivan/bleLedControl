@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import { customEffectFrame, customEffects, limitRgbStep, smoothnessToMaxStep } from "./custom-effects";
 
 describe("customEffectFrame", () => {
+  it("contains every additional ambient-lamp mode", () => {
+    const names = new Set(customEffects.map(({ name }) => name));
+    for (const name of ["Дыхание", "Ёлка", "Лава-лампа", "Лето", "Маятник", "Ночник", "Огонь", "Пульс", "Радуга", "Светомузыка", "Эквалайзер"]) {
+      expect(names.has(name), name).toBe(true);
+    }
+  });
+
   it("interpolates a cycle without exceeding RGB bounds", () => {
     const effect = customEffects.find(({ id }) => id === "party")!;
     expect(customEffectFrame(effect, 0, 50)).toEqual([255, 20, 90]);
