@@ -2,6 +2,7 @@ import "./styles.css";
 import { registerSW } from "virtual:pwa-register";
 import { BleLampController, type ControllerSnapshot } from "./ble-controller";
 import { analogEffects, dmxEffects } from "./effects";
+import { customEffectFrame, customEffects } from "./custom-effects";
 import type { ProtocolKind, RgbOrder } from "./protocol";
 import { applyChannelBalance, hexToRgb, srgbToLedRgb, type RgbColor } from "./color";
 
@@ -13,7 +14,7 @@ app.innerHTML = `
       <img src="./lamp.svg" alt="" width="46" height="46" />
       <div><strong>Luma BLE</strong><span>лампа без облака</span></div>
     </div>
-    <button id="install-help" class="icon-button" aria-label="Как установить">?</button>
+    <button id="install-help" class="icon-button install-button" aria-label="Установить на экран Домой" title="Установить на экран Домой">⇩</button>
   </header>
 
   <main>
@@ -65,13 +66,20 @@ app.innerHTML = `
     </div>
 
     <div class="tab-panel" data-panel="effects">
-      <section class="card">
-        <div class="section-heading"><div><span class="eyebrow">Анимация</span><h2>Встроенные эффекты</h2></div></div>
-        <label class="field"><span>Режим</span><select id="effect" data-connected></select></label>
-        <button id="apply-effect" class="primary wide" data-connected>Запустить эффект</button>
+      <section class="card effects-card">
+        <div class="section-heading"><div><span class="eyebrow">Контроллер</span><h2>Встроенные эффекты</h2></div><span id="effect-count" class="count-badge"></span></div>
+        <label class="effect-search"><span aria-hidden="true">⌕</span><input id="effect-search" type="search" placeholder="Найти эффект" autocomplete="off" /></label>
+        <div id="builtin-effects" class="effect-grid" aria-label="Встроенные эффекты"></div>
+        <button id="toggle-effects" class="secondary wide hidden">Показать все</button>
         <label class="range-label" for="speed"><span>Скорость</span><output id="speed-value">50%</output></label>
         <input id="speed" type="range" min="0" max="100" value="50" data-connected />
         <label id="direction-row" class="switch-row hidden"><span><strong>Обратное направление</strong><small>Для адресной RGBIC-ленты</small></span><input id="direction" type="checkbox" data-connected /></label>
+      </section>
+      <section class="card effects-card custom-effects-card">
+        <div class="section-heading"><div><span class="eyebrow">Luma Studio</span><h2>Атмосферные режимы</h2></div><span class="local-badge">Локально</span></div>
+        <p class="muted">Эти режимы создаёт приложение, передавая цвета по Bluetooth. Для непрерывной анимации оставьте Luma BLE открытой.</p>
+        <div id="custom-effects" class="effect-grid custom-grid" aria-label="Атмосферные режимы"></div>
+        <button id="stop-custom-effect" class="secondary wide hidden">Остановить атмосферный режим</button>
       </section>
     </div>
 
@@ -146,7 +154,7 @@ app.innerHTML = `
         <button id="clear-log" class="text-button">Очистить журнал</button>
       </details>
       <section class="card about">
-        <strong>Luma BLE <span>v0.2.5</span></strong>
+        <strong>Luma BLE <span>v0.3.0</span></strong>
         <p>Работает локально. Команды и звук не отправляются на сервер.</p>
       </section>
     </div>
@@ -154,8 +162,8 @@ app.innerHTML = `
 
   <dialog id="help-dialog">
     <button class="dialog-close" aria-label="Закрыть">×</button>
-    <h2>Запуск на iPhone</h2>
-    <ol><li>Установите бесплатный Bluefy.</li><li>Откройте адрес Luma BLE внутри Bluefy.</li><li>Разрешите Bluetooth и выберите устройство с именем LED…</li></ol>
+    <h2>Установка на iPhone</h2>
+    <ol><li>Установите бесплатный Bluefy и откройте в нём Luma BLE.</li><li>Нажмите «Поделиться» → «На экран Домой».</li><li>Запустите ярлык Luma BLE, разрешите Bluetooth и выберите устройство LED…</li></ol>
     <p>Подписка, аккаунт и платная учётная запись разработчика не нужны.</p>
     <button class="primary dialog-ok">Понятно</button>
   </dialog>
@@ -169,8 +177,13 @@ const connectedControls = all<HTMLInputElement | HTMLButtonElement | HTMLSelectE
 let latestSnapshot: ControllerSnapshot | undefined;
 let powerOn: boolean | null = null;
 let hasControlledLamp = false;
-let activeMode: "color" | "effect" | "hardware-mic" = "color";
+let activeMode: "color" | "effect" | "custom-effect" | "hardware-mic" = "color";
 let activeEffect = 135;
+let activeCustomEffect = "";
+let customEffectTimer = 0;
+let customEffectGeneration = 0;
+let customEffectStartedAt = 0;
+let showAllEffects = false;
 let activeMicMode = 1;
 let reverseDirection = false;
 let musicRunning = false;
@@ -216,7 +229,8 @@ function updateConnection(snapshot: ControllerSnapshot) {
   const addressable = snapshot.protocolKind !== "ble";
   $("#direction-row").classList.toggle("hidden", !addressable);
   $("#pixel-settings").classList.toggle("hidden", !addressable);
-  populateEffects(addressable);
+  populateEffects(addressable, connected);
+  renderCustomEffects(connected);
 }
 
 function stateText(state: ControllerSnapshot["state"]) {
@@ -235,6 +249,8 @@ async function restoreLampState() {
     await controller.effect(activeEffect);
     await controller.speed(Number($<HTMLInputElement>("#speed").value));
     if (controller.addressable) await controller.direction(reverseDirection);
+  } else if (activeMode === "custom-effect") {
+    startCustomEffect(activeCustomEffect, false);
   } else if (activeMode === "hardware-mic") {
     await controller.hardwareMic(activeMicMode);
   } else {
@@ -326,6 +342,48 @@ async function run(action: () => Promise<unknown>, success?: string) {
   }
 }
 
+function stopCustomEffect(resetMode = true) {
+  customEffectGeneration += 1;
+  window.clearTimeout(customEffectTimer);
+  customEffectTimer = 0;
+  if (resetMode && activeMode === "custom-effect") activeMode = "color";
+  renderCustomEffects(controller.connected);
+}
+
+function startCustomEffect(effectId: string, announce = true) {
+  const effect = customEffects.find(({ id }) => id === effectId);
+  if (!effect) return;
+
+  stopCustomEffect(false);
+  activeCustomEffect = effect.id;
+  activeMode = "custom-effect";
+  hasControlledLamp = true;
+  powerOn = true;
+  customEffectStartedAt = performance.now();
+  const generation = ++customEffectGeneration;
+  updatePowerUi();
+  populateEffects(controller.addressable, controller.connected);
+  renderCustomEffects(controller.connected);
+
+  const tick = async () => {
+    if (generation !== customEffectGeneration || activeMode !== "custom-effect") return;
+    if (controller.connected) {
+      try {
+        const frame = customEffectFrame(effect, performance.now() - customEffectStartedAt, Number($<HTMLInputElement>("#speed").value));
+        await controller.color(...outputColor(frame));
+      } catch (error) {
+        addLog(`Атмосферный режим ожидает подключения: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (generation === customEffectGeneration && activeMode === "custom-effect") {
+      customEffectTimer = window.setTimeout(() => void tick(), 180);
+    }
+  };
+
+  void tick();
+  if (announce) showToast(`${effect.name} запущен`);
+}
+
 function currentColor() { return hexToRgb(($<HTMLInputElement>("#color")).value); }
 
 function outputColor(color: RgbColor): RgbColor {
@@ -358,17 +416,84 @@ function updatePowerUi() {
   $("#power-label").textContent = powerOn === null ? "Состояние не определено" : isOn ? "Включено" : "Выключено";
 }
 
-function populateEffects(addressable: boolean) {
-  const select = $<HTMLSelectElement>("#effect");
-  const marker = addressable ? "dmx" : "ble";
-  if (select.dataset.kind === marker) return;
-  select.dataset.kind = marker;
-  select.replaceChildren(...(addressable ? dmxEffects : analogEffects).map(({ id, name }) => {
-    const option = document.createElement("option");
-    option.value = String(id);
-    option.textContent = `${name} · ${id}`;
-    return option;
-  }));
+function effectDescription(name: string) {
+  if (name.includes("градиент") || name.includes("Плавная")) return "Плавный переход";
+  if (name.includes("вспыш") || name.includes("стробоскоп")) return "Яркие импульсы";
+  if (name.includes("дыхание")) return "Мягкая пульсация";
+  if (name.includes("назад")) return "Движение назад";
+  if (name.includes("вперёд")) return "Движение вперёд";
+  if (name.includes("Авто")) return "Смена всех режимов";
+  return "Динамическое свечение";
+}
+
+function effectGradient(id: number) {
+  const hue = (id * 47) % 360;
+  return `linear-gradient(135deg, hsl(${hue} 88% 58%), hsl(${(hue + 75) % 360} 82% 45%))`;
+}
+
+function populateEffects(addressable: boolean, connected = latestSnapshot?.state === "connected") {
+  const container = $("#builtin-effects");
+  const query = $<HTMLInputElement>("#effect-search").value.trim().toLocaleLowerCase("ru-RU");
+  const source = addressable ? dmxEffects : analogEffects;
+  const featured = addressable && !showAllEffects && !query
+    ? source.filter(({ name }) => !/^Эффект \d+$/.test(name))
+    : source;
+  const visible = featured.filter(({ id, name }) => `${name} ${id}`.toLocaleLowerCase("ru-RU").includes(query));
+  const fragment = document.createDocumentFragment();
+
+  visible.forEach(({ id, name }) => {
+    const button = document.createElement("button");
+    button.className = `effect-option${activeMode === "effect" && activeEffect === id ? " active" : ""}`;
+    button.disabled = !connected;
+    button.setAttribute("aria-pressed", String(activeMode === "effect" && activeEffect === id));
+    button.innerHTML = `<i></i><span><strong></strong><small></small></span><em></em>`;
+    button.querySelector("i")!.setAttribute("style", `--effect-gradient:${effectGradient(id)}`);
+    button.querySelector("strong")!.textContent = name;
+    button.querySelector("small")!.textContent = effectDescription(name);
+    button.querySelector("em")!.textContent = String(id);
+    button.addEventListener("click", () => void run(async () => {
+      stopCustomEffect(false);
+      activeEffect = id;
+      activeMode = "effect";
+      hasControlledLamp = true;
+      await controller.effect(activeEffect);
+      powerOn = true;
+      updatePowerUi();
+      populateEffects(controller.addressable, true);
+      renderCustomEffects(true);
+    }, `${name} запущен`));
+    fragment.append(button);
+  });
+
+  container.replaceChildren(fragment);
+  $("#effect-count").textContent = `${visible.length} из ${source.length}`;
+  const toggle = $("#toggle-effects");
+  toggle.classList.toggle("hidden", !addressable || Boolean(query));
+  toggle.textContent = showAllEffects ? "Показать избранные" : `Показать все ${source.length}`;
+}
+
+function rgbCss([red, green, blue]: RgbColor) {
+  return `rgb(${red} ${green} ${blue})`;
+}
+
+function renderCustomEffects(connected = latestSnapshot?.state === "connected") {
+  const fragment = document.createDocumentFragment();
+  customEffects.forEach((effect) => {
+    const button = document.createElement("button");
+    const selected = activeMode === "custom-effect" && activeCustomEffect === effect.id;
+    button.className = `effect-option custom-effect-option${selected ? " active" : ""}`;
+    button.disabled = !connected;
+    button.setAttribute("aria-pressed", String(selected));
+    button.innerHTML = `<i><b></b></i><span><strong></strong><small></small></span>`;
+    button.querySelector("i")!.setAttribute("style", `--effect-gradient:linear-gradient(135deg, ${effect.colors.map(rgbCss).join(",")})`);
+    button.querySelector("b")!.textContent = effect.icon;
+    button.querySelector("strong")!.textContent = effect.name;
+    button.querySelector("small")!.textContent = effect.description;
+    button.addEventListener("click", () => startCustomEffect(effect.id));
+    fragment.append(button);
+  });
+  $("#custom-effects").replaceChildren(fragment);
+  $("#stop-custom-effect").classList.toggle("hidden", activeMode !== "custom-effect");
 }
 
 function throttledInput(callback: () => Promise<unknown>, delay = 75) {
@@ -393,16 +518,23 @@ presetColors.forEach((color) => {
   presetContainer.append(button);
 });
 
-all<HTMLButtonElement>(".tab").forEach((tab) => tab.addEventListener("click", () => {
+function activateTab(name: string, updateUrl = true) {
+  const tab = all<HTMLButtonElement>(".tab").find((item) => item.dataset.tab === name);
+  if (!tab) return;
   all(".tab").forEach((item) => item.classList.toggle("active", item === tab));
-  all<HTMLElement>(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === tab.dataset.tab));
-}));
+  all<HTMLElement>(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === name));
+  if (updateUrl) history.replaceState(null, "", `#${name}`);
+}
+
+all<HTMLButtonElement>(".tab").forEach((tab) => tab.addEventListener("click", () => activateTab(tab.dataset.tab ?? "light")));
+activateTab(location.hash.slice(1) || "light", false);
 
 $("#connect").addEventListener("click", () => void run(() => latestSnapshot?.state === "disconnected" || latestSnapshot?.state === "paused" ? controller.reconnect() : controller.connect(), "Лампа подключена"));
 $("#disconnect").addEventListener("click", () => controller.disconnect());
 
 $("#power").addEventListener("click", () => void run(async () => {
   const nextPower = powerOn !== true;
+  if (!nextPower) stopCustomEffect();
   await controller.power(nextPower);
   powerOn = nextPower;
   hasControlledLamp = true;
@@ -415,6 +547,7 @@ colorInput.addEventListener("input", throttledInput(async () => {
   $("#color-value").textContent = hex;
   $("#color-preview").setAttribute("style", `--selected-color:${hex}`);
   updateRgbReadout();
+  stopCustomEffect();
   activeMode = "color";
   hasControlledLamp = true;
   await controller.color(...outputColor(hexToRgb(hex)));
@@ -439,17 +572,18 @@ bindRange("#brightness", "#brightness-value", "%", async (value) => {
 });
 bindRange("#speed", "#speed-value", "%", async (value) => {
   hasControlledLamp = true;
-  await controller.speed(value);
+  if (activeMode !== "custom-effect") await controller.speed(value);
 });
 
-$("#apply-effect").addEventListener("click", () => void run(async () => {
-  activeEffect = Number($<HTMLSelectElement>("#effect").value);
-  activeMode = "effect";
-  hasControlledLamp = true;
-  await controller.effect(activeEffect);
-  powerOn = true;
-  updatePowerUi();
-}, "Эффект запущен"));
+$<HTMLInputElement>("#effect-search").addEventListener("input", () => populateEffects(controller.addressable, controller.connected));
+$("#toggle-effects").addEventListener("click", () => {
+  showAllEffects = !showAllEffects;
+  populateEffects(controller.addressable, controller.connected);
+});
+$("#stop-custom-effect").addEventListener("click", () => {
+  stopCustomEffect();
+  showToast("Атмосферный режим остановлен");
+});
 $("#direction").addEventListener("change", () => void run(async () => {
   reverseDirection = $<HTMLInputElement>("#direction").checked;
   hasControlledLamp = true;
@@ -465,6 +599,8 @@ $("#music-toggle").addEventListener("click", () => void (musicRunning ? stopMusi
 
 async function startMusic() {
   try {
+    stopCustomEffect();
+    activeMode = "color";
     musicStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     audioContext = new AudioContext();
     const source = audioContext.createMediaStreamSource(musicStream);
@@ -511,6 +647,7 @@ function stopMusic() {
 }
 
 all<HTMLButtonElement>(".mic-mode").forEach((button) => button.addEventListener("click", () => void run(async () => {
+  stopCustomEffect();
   activeMicMode = Number(button.dataset.mode);
   activeMode = "hardware-mic";
   hasControlledLamp = true;
@@ -566,6 +703,7 @@ $<HTMLSelectElement>("#rgb-order").addEventListener("change", (event) => {
   controller.setRgbOrder((event.target as HTMLSelectElement).value as RgbOrder);
   saveSettings();
   if (controller.connected) void run(async () => {
+    stopCustomEffect();
     activeMode = "color";
     hasControlledLamp = true;
     await controller.color(...currentOutputColor());
@@ -577,6 +715,7 @@ $<HTMLInputElement>("#pixels").addEventListener("change", saveSettings);
 $<HTMLInputElement>("#color-correction").addEventListener("change", () => {
   saveSettings();
   if (controller.connected) void run(async () => {
+    stopCustomEffect();
     activeMode = "color";
     hasControlledLamp = true;
     await controller.color(...currentOutputColor());
@@ -586,6 +725,7 @@ $<HTMLInputElement>("#color-correction").addEventListener("change", () => {
 });
 
 const sendBalancedColor = throttledInput(async () => {
+  stopCustomEffect();
   activeMode = "color";
   hasControlledLamp = true;
   await controller.color(...currentOutputColor());
@@ -621,6 +761,7 @@ all<HTMLButtonElement>(".channel-test").forEach((button) => button.addEventListe
   $("#color-value").textContent = color.toUpperCase();
   $("#color-preview").setAttribute("style", `--selected-color:${color}`);
   updateRgbReadout();
+  stopCustomEffect();
   activeMode = "color";
   hasControlledLamp = true;
   await controller.color(...outputColor(hexToRgb(color)));
