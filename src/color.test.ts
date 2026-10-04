@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hexToRgb, srgbToLedRgb } from "./color";
+import { applyChannelBalance, hexToRgb, srgbToLedRgb } from "./color";
 
 describe("hexToRgb", () => {
   it.each([
@@ -30,5 +30,17 @@ describe("hexToRgb", () => {
     expect(srgbToLedRgb([255, 0, 0])).toEqual([255, 0, 0]);
     expect(srgbToLedRgb([0, 255, 0])).toEqual([0, 255, 0]);
     expect(srgbToLedRgb([0, 0, 255])).toEqual([0, 0, 255]);
+  });
+
+  it("reduces the overpowered blue channel in purple", () => {
+    const linearPurple = srgbToLedRgb(hexToRgb("#af52de"));
+    expect(linearPurple).toEqual([109, 22, 186]);
+    expect(applyChannelBalance(linearPurple, { red: 100, green: 100, blue: 55 }))
+      .toEqual([109, 22, 102]);
+  });
+
+  it("clamps boosted channel values", () => {
+    expect(applyChannelBalance([240, 100, 50], { red: 150, green: 100, blue: 100 }))
+      .toEqual([255, 100, 50]);
   });
 });

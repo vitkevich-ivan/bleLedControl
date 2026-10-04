@@ -3,7 +3,7 @@ import { registerSW } from "virtual:pwa-register";
 import { BleLampController, type ControllerSnapshot } from "./ble-controller";
 import { analogEffects, dmxEffects } from "./effects";
 import type { ProtocolKind, RgbOrder } from "./protocol";
-import { hexToRgb, srgbToLedRgb, type RgbColor } from "./color";
+import { applyChannelBalance, hexToRgb, srgbToLedRgb, type RgbColor } from "./color";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -119,6 +119,13 @@ app.innerHTML = `
           <option>RGB</option><option selected>RBG</option><option>GRB</option><option>GBR</option><option>BRG</option><option>BGR</option>
         </select></label>
         <label class="switch-row correction-row"><span><strong>Коррекция смешанных цветов</strong><small>Преобразует экранный sRGB в яркость светодиодов</small></span><input id="color-correction" type="checkbox" checked /></label>
+        <div class="channel-balance">
+          <span class="eyebrow">Баланс каналов</span>
+          <label class="compact-range red-channel"><span>Красный <output id="red-gain-value">100%</output></span><input id="red-gain" type="range" min="25" max="150" value="100" /></label>
+          <label class="compact-range green-channel"><span>Зелёный <output id="green-gain-value">100%</output></span><input id="green-gain" type="range" min="25" max="150" value="100" /></label>
+          <label class="compact-range blue-channel"><span>Синий <output id="blue-gain-value">55%</output></span><input id="blue-gain" type="range" min="25" max="150" value="55" /></label>
+          <button id="reset-balance" class="text-button">Сбросить баланс</button>
+        </div>
         <div class="calibration">
           <span class="eyebrow">Проверка каналов</span>
           <p class="muted">Каждая кнопка должна зажигать только указанный цвет. Если цвета не совпадают, смените порядок выше.</p>
@@ -139,7 +146,7 @@ app.innerHTML = `
         <button id="clear-log" class="text-button">Очистить журнал</button>
       </details>
       <section class="card about">
-        <strong>Luma BLE <span>v0.2.3</span></strong>
+        <strong>Luma BLE <span>v0.2.4</span></strong>
         <p>Работает локально. Команды и звук не отправляются на сервер.</p>
       </section>
     </div>
@@ -183,6 +190,9 @@ interface SavedSettings {
   rgbOrder: RgbOrder;
   pixels: string;
   colorCorrection?: boolean;
+  redGain?: string;
+  greenGain?: string;
+  blueGain?: string;
 }
 
 function addLog(message: string) {
@@ -245,7 +255,7 @@ function readSettings(): SavedSettings | undefined {
 
 function saveSettings() {
   const settings: SavedSettings = {
-    version: 5,
+    version: 6,
     color: $<HTMLInputElement>("#color").value,
     brightness: $<HTMLInputElement>("#brightness").value,
     speed: $<HTMLInputElement>("#speed").value,
@@ -254,6 +264,9 @@ function saveSettings() {
     rgbOrder: $<HTMLSelectElement>("#rgb-order").value as RgbOrder,
     pixels: $<HTMLInputElement>("#pixels").value,
     colorCorrection: $<HTMLInputElement>("#color-correction").checked,
+    redGain: $<HTMLInputElement>("#red-gain").value,
+    greenGain: $<HTMLInputElement>("#green-gain").value,
+    blueGain: $<HTMLInputElement>("#blue-gain").value,
   };
   try {
     localStorage.setItem("luma-settings", JSON.stringify(settings));
@@ -273,10 +286,14 @@ function restoreSettings() {
   $<HTMLInputElement>("#speed").value = saved.speed || "50";
   $<HTMLInputElement>("#sensitivity").value = saved.sensitivity || "15";
   $<HTMLSelectElement>("#protocol").value = saved.protocol || "auto";
-  const rgbOrder = saved.version === 5 ? (saved.rgbOrder || "RBG") : "RBG";
+  const rgbOrder = saved.version === 6 ? (saved.rgbOrder || "RBG") : "RBG";
   $<HTMLSelectElement>("#rgb-order").value = rgbOrder;
   $<HTMLInputElement>("#pixels").value = saved.pixels || "100";
-  $<HTMLInputElement>("#color-correction").checked = saved.version === 5 ? saved.colorCorrection !== false : true;
+  $<HTMLInputElement>("#color-correction").checked = saved.version === 6 ? saved.colorCorrection !== false : true;
+  $<HTMLInputElement>("#red-gain").value = saved.version === 6 ? (saved.redGain || "100") : "100";
+  $<HTMLInputElement>("#green-gain").value = saved.version === 6 ? (saved.greenGain || "100") : "100";
+  $<HTMLInputElement>("#blue-gain").value = saved.version === 6 ? (saved.blueGain || "55") : "55";
+  updateBalanceReadouts();
   $("#color-value").textContent = $<HTMLInputElement>("#color").value.toUpperCase();
   updateRgbReadout();
   $("#brightness-value").textContent = `${$<HTMLInputElement>("#brightness").value}%`;
@@ -310,10 +327,21 @@ async function run(action: () => Promise<unknown>, success?: string) {
 function currentColor() { return hexToRgb(($<HTMLInputElement>("#color")).value); }
 
 function outputColor(color: RgbColor): RgbColor {
-  return $<HTMLInputElement>("#color-correction").checked ? srgbToLedRgb(color) : color;
+  const corrected = $<HTMLInputElement>("#color-correction").checked ? srgbToLedRgb(color) : color;
+  return applyChannelBalance(corrected, {
+    red: Number($<HTMLInputElement>("#red-gain").value),
+    green: Number($<HTMLInputElement>("#green-gain").value),
+    blue: Number($<HTMLInputElement>("#blue-gain").value),
+  });
 }
 
 function currentOutputColor() { return outputColor(currentColor()); }
+
+function updateBalanceReadouts() {
+  for (const channel of ["red", "green", "blue"] as const) {
+    $(`#${channel}-gain-value`).textContent = `${$<HTMLInputElement>(`#${channel}-gain`).value}%`;
+  }
+}
 
 function updateRgbReadout() {
   const [red, green, blue] = currentColor();
@@ -554,6 +582,31 @@ $<HTMLInputElement>("#color-correction").addEventListener("change", () => {
     updatePowerUi();
   }, "Цветокоррекция применена");
 });
+
+const sendBalancedColor = throttledInput(async () => {
+  activeMode = "color";
+  hasControlledLamp = true;
+  await controller.color(...currentOutputColor());
+  powerOn = true;
+  updatePowerUi();
+});
+
+for (const channel of ["red", "green", "blue"] as const) {
+  $<HTMLInputElement>(`#${channel}-gain`).addEventListener("input", () => {
+    updateBalanceReadouts();
+    saveSettings();
+    if (controller.connected) sendBalancedColor();
+  });
+}
+
+$("#reset-balance").addEventListener("click", () => {
+  $<HTMLInputElement>("#red-gain").value = "100";
+  $<HTMLInputElement>("#green-gain").value = "100";
+  $<HTMLInputElement>("#blue-gain").value = "55";
+  updateBalanceReadouts();
+  saveSettings();
+  if (controller.connected) sendBalancedColor();
+});
 $("#apply-strip").addEventListener("click", () => void run(() => {
   const pixels = Number($<HTMLInputElement>("#pixels").value);
   const order = $<HTMLSelectElement>("#rgb-order").selectedIndex + 1;
@@ -585,6 +638,7 @@ $("#browser-warning").classList.toggle("hidden", Boolean(navigator.bluetooth));
 restoreSettings();
 $("#color-preview").setAttribute("style", `--selected-color:${$<HTMLInputElement>("#color").value}`);
 updateRgbReadout();
+updateBalanceReadouts();
 updatePowerUi();
 
 registerSW({

@@ -1,4 +1,5 @@
 export type RgbColor = readonly [red: number, green: number, blue: number];
+export type ChannelBalance = Readonly<{ red: number; green: number; blue: number }>;
 
 export function hexToRgb(hex: string): RgbColor {
   const normalized = hex.trim().replace(/^#/, "");
@@ -22,5 +23,17 @@ export function srgbToLedRgb([red, green, blue]: RgbColor): RgbColor {
     srgbChannelToLinear(red),
     srgbChannelToLinear(green),
     srgbChannelToLinear(blue),
+  ];
+}
+
+export function applyChannelBalance(
+  [red, green, blue]: RgbColor,
+  balance: ChannelBalance,
+): RgbColor {
+  const scale = (value: number, percent: number) => Math.max(0, Math.min(255, Math.round(value * percent / 100)));
+  return [
+    scale(red, balance.red),
+    scale(green, balance.green),
+    scale(blue, balance.blue),
   ];
 }
