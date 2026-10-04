@@ -40,6 +40,10 @@ export function limitRgbStep(previous: RgbColor, target: RgbColor, maxStep: numb
   ];
 }
 
+export function smoothnessToMaxStep(value: number) {
+  return 11 - Math.max(1, Math.min(10, Math.round(value)));
+}
+
 function mix(from: RgbColor, to: RgbColor, amount: number): RgbColor {
   return [
     clamp(from[0] + (to[0] - from[0]) * amount),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { customEffectFrame, customEffects, limitRgbStep } from "./custom-effects";
+import { customEffectFrame, customEffects, limitRgbStep, smoothnessToMaxStep } from "./custom-effects";
 
 describe("customEffectFrame", () => {
   it("interpolates a cycle without exceeding RGB bounds", () => {
@@ -31,6 +31,11 @@ describe("customEffectFrame", () => {
   });
 
   it("limits every outgoing channel step", () => {
-    expect(limitRgbStep([20, 200, 100], [255, 0, 106], 2)).toEqual([22, 198, 102]);
+    expect(limitRgbStep([20, 200, 100], [255, 0, 106], 1)).toEqual([21, 199, 101]);
+  });
+
+  it("maps maximum smoothness to the smallest RGB step", () => {
+    expect(smoothnessToMaxStep(10)).toBe(1);
+    expect(smoothnessToMaxStep(1)).toBe(10);
   });
 });

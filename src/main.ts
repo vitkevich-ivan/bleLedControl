@@ -2,7 +2,7 @@ import "./styles.css";
 import { registerSW } from "virtual:pwa-register";
 import { BleLampController, type ControllerSnapshot } from "./ble-controller";
 import { analogEffects, dmxEffects, effectPalette } from "./effects";
-import { customEffectFrame, customEffects, limitRgbStep } from "./custom-effects";
+import { customEffectFrame, customEffects, limitRgbStep, smoothnessToMaxStep } from "./custom-effects";
 import type { ProtocolKind, RgbOrder } from "./protocol";
 import { applyChannelBalance, hexToRgb, srgbToLedRgb, type RgbColor } from "./color";
 
@@ -73,6 +73,9 @@ app.innerHTML = `
         <button id="toggle-effects" class="secondary wide hidden">Показать все</button>
         <label class="range-label" for="speed"><span>Скорость</span><output id="speed-value">50%</output></label>
         <input id="speed" type="range" min="0" max="100" value="50" data-connected />
+        <label class="range-label" for="smoothness"><span>Плавность</span><output id="smoothness-value">100%</output></label>
+        <input id="smoothness" type="range" min="1" max="10" value="10" />
+        <p class="range-hint">Для локальных атмосферных режимов</p>
         <label id="direction-row" class="switch-row hidden"><span><strong>Обратное направление</strong><small>Для адресной RGBIC-ленты</small></span><input id="direction" type="checkbox" data-connected /></label>
       </section>
       <section class="card effects-card custom-effects-card">
@@ -154,7 +157,7 @@ app.innerHTML = `
         <button id="clear-log" class="text-button">Очистить журнал</button>
       </details>
       <section class="card about">
-        <strong>Luma BLE <span>v0.3.4</span></strong>
+        <strong>Luma BLE <span>v0.3.5</span></strong>
         <p>Работает локально. Команды и звук не отправляются на сервер.</p>
       </section>
     </div>
@@ -207,6 +210,7 @@ interface SavedSettings {
   redGain?: string;
   greenGain?: string;
   blueGain?: string;
+  smoothness?: string;
 }
 
 function addLog(message: string) {
@@ -272,7 +276,7 @@ function readSettings(): SavedSettings | undefined {
 
 function saveSettings() {
   const settings: SavedSettings = {
-    version: 7,
+    version: 8,
     color: $<HTMLInputElement>("#color").value,
     brightness: $<HTMLInputElement>("#brightness").value,
     speed: $<HTMLInputElement>("#speed").value,
@@ -284,6 +288,7 @@ function saveSettings() {
     redGain: $<HTMLInputElement>("#red-gain").value,
     greenGain: $<HTMLInputElement>("#green-gain").value,
     blueGain: $<HTMLInputElement>("#blue-gain").value,
+    smoothness: $<HTMLInputElement>("#smoothness").value,
   };
   try {
     localStorage.setItem("luma-settings", JSON.stringify(settings));
@@ -303,7 +308,7 @@ function restoreSettings() {
   $<HTMLInputElement>("#speed").value = saved.speed || "50";
   $<HTMLInputElement>("#sensitivity").value = saved.sensitivity || "15";
   $<HTMLSelectElement>("#protocol").value = saved.protocol || "auto";
-  const hasCurrentColorSettings = saved.version === 6 || saved.version === 7;
+  const hasCurrentColorSettings = saved.version === 6 || saved.version === 7 || saved.version === 8;
   const rgbOrder = hasCurrentColorSettings ? (saved.rgbOrder || "RBG") : "RBG";
   $<HTMLSelectElement>("#rgb-order").value = rgbOrder;
   $<HTMLInputElement>("#pixels").value = saved.pixels || "100";
@@ -312,11 +317,13 @@ function restoreSettings() {
   $<HTMLInputElement>("#green-gain").value = hasCurrentColorSettings ? (saved.greenGain || "100") : "100";
   const savedBlueGain = hasCurrentColorSettings ? (saved.blueGain || "100") : "100";
   $<HTMLInputElement>("#blue-gain").value = saved.version === 6 && savedBlueGain === "55" ? "100" : savedBlueGain;
+  $<HTMLInputElement>("#smoothness").value = saved.version === 8 ? (saved.smoothness || "10") : "10";
   updateBalanceReadouts();
   $("#color-value").textContent = $<HTMLInputElement>("#color").value.toUpperCase();
   updateRgbReadout();
   $("#brightness-value").textContent = `${$<HTMLInputElement>("#brightness").value}%`;
   $("#speed-value").textContent = `${$<HTMLInputElement>("#speed").value}%`;
+  $("#smoothness-value").textContent = `${Number($<HTMLInputElement>("#smoothness").value) * 10}%`;
   $("#sensitivity-value").textContent = `${(Number($<HTMLInputElement>("#sensitivity").value) / 10).toFixed(1)}×`;
   controller.setForcedProtocol(saved.protocol || "auto");
   controller.setRgbOrder(rgbOrder);
@@ -374,7 +381,8 @@ function startCustomEffect(effectId: string, announce = true) {
       try {
         const frame = customEffectFrame(effect, performance.now() - customEffectStartedAt, Number($<HTMLInputElement>("#speed").value));
         const target = outputColor(frame);
-        const outgoing = lastCustomOutput ? limitRgbStep(lastCustomOutput, target, 2) : target;
+        const maxStep = smoothnessToMaxStep(Number($<HTMLInputElement>("#smoothness").value));
+        const outgoing = lastCustomOutput ? limitRgbStep(lastCustomOutput, target, maxStep) : target;
         await controller.color(...outgoing);
         lastCustomOutput = outgoing;
       } catch (error) {
@@ -579,6 +587,11 @@ bindRange("#brightness", "#brightness-value", "%", async (value) => {
 bindRange("#speed", "#speed-value", "%", async (value) => {
   hasControlledLamp = true;
   if (activeMode !== "custom-effect") await controller.speed(value);
+});
+$<HTMLInputElement>("#smoothness").addEventListener("input", (event) => {
+  const value = Number((event.target as HTMLInputElement).value);
+  $("#smoothness-value").textContent = `${value * 10}%`;
+  saveSettings();
 });
 
 $<HTMLInputElement>("#effect-search").addEventListener("input", () => populateEffects(controller.addressable, controller.connected));
