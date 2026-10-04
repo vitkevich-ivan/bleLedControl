@@ -3,7 +3,7 @@ import { registerSW } from "virtual:pwa-register";
 import { BleLampController, type ControllerSnapshot } from "./ble-controller";
 import { analogEffects, dmxEffects } from "./effects";
 import type { ProtocolKind, RgbOrder } from "./protocol";
-import { hexToRgb } from "./color";
+import { hexToRgb, srgbToLedRgb, type RgbColor } from "./color";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -118,6 +118,7 @@ app.innerHTML = `
         <label class="field"><span>Порядок цветов</span><select id="rgb-order">
           <option>RGB</option><option selected>RBG</option><option>GRB</option><option>GBR</option><option>BRG</option><option>BGR</option>
         </select></label>
+        <label class="switch-row correction-row"><span><strong>Коррекция смешанных цветов</strong><small>Преобразует экранный sRGB в яркость светодиодов</small></span><input id="color-correction" type="checkbox" checked /></label>
         <div class="calibration">
           <span class="eyebrow">Проверка каналов</span>
           <p class="muted">Каждая кнопка должна зажигать только указанный цвет. Если цвета не совпадают, смените порядок выше.</p>
@@ -138,7 +139,7 @@ app.innerHTML = `
         <button id="clear-log" class="text-button">Очистить журнал</button>
       </details>
       <section class="card about">
-        <strong>Luma BLE <span>v0.2.2</span></strong>
+        <strong>Luma BLE <span>v0.2.3</span></strong>
         <p>Работает локально. Команды и звук не отправляются на сервер.</p>
       </section>
     </div>
@@ -181,6 +182,7 @@ interface SavedSettings {
   protocol: ProtocolKind | "auto";
   rgbOrder: RgbOrder;
   pixels: string;
+  colorCorrection?: boolean;
 }
 
 function addLog(message: string) {
@@ -226,7 +228,7 @@ async function restoreLampState() {
   } else if (activeMode === "hardware-mic") {
     await controller.hardwareMic(activeMicMode);
   } else {
-    await controller.color(...currentColor());
+    await controller.color(...currentOutputColor());
   }
   addLog("Состояние лампы восстановлено");
 }
@@ -243,7 +245,7 @@ function readSettings(): SavedSettings | undefined {
 
 function saveSettings() {
   const settings: SavedSettings = {
-    version: 4,
+    version: 5,
     color: $<HTMLInputElement>("#color").value,
     brightness: $<HTMLInputElement>("#brightness").value,
     speed: $<HTMLInputElement>("#speed").value,
@@ -251,6 +253,7 @@ function saveSettings() {
     protocol: $<HTMLSelectElement>("#protocol").value as SavedSettings["protocol"],
     rgbOrder: $<HTMLSelectElement>("#rgb-order").value as RgbOrder,
     pixels: $<HTMLInputElement>("#pixels").value,
+    colorCorrection: $<HTMLInputElement>("#color-correction").checked,
   };
   try {
     localStorage.setItem("luma-settings", JSON.stringify(settings));
@@ -270,9 +273,10 @@ function restoreSettings() {
   $<HTMLInputElement>("#speed").value = saved.speed || "50";
   $<HTMLInputElement>("#sensitivity").value = saved.sensitivity || "15";
   $<HTMLSelectElement>("#protocol").value = saved.protocol || "auto";
-  const rgbOrder = saved.version === 4 ? (saved.rgbOrder || "RBG") : "RBG";
+  const rgbOrder = saved.version === 5 ? (saved.rgbOrder || "RBG") : "RBG";
   $<HTMLSelectElement>("#rgb-order").value = rgbOrder;
   $<HTMLInputElement>("#pixels").value = saved.pixels || "100";
+  $<HTMLInputElement>("#color-correction").checked = saved.version === 5 ? saved.colorCorrection !== false : true;
   $("#color-value").textContent = $<HTMLInputElement>("#color").value.toUpperCase();
   updateRgbReadout();
   $("#brightness-value").textContent = `${$<HTMLInputElement>("#brightness").value}%`;
@@ -304,6 +308,12 @@ async function run(action: () => Promise<unknown>, success?: string) {
 }
 
 function currentColor() { return hexToRgb(($<HTMLInputElement>("#color")).value); }
+
+function outputColor(color: RgbColor): RgbColor {
+  return $<HTMLInputElement>("#color-correction").checked ? srgbToLedRgb(color) : color;
+}
+
+function currentOutputColor() { return outputColor(currentColor()); }
 
 function updateRgbReadout() {
   const [red, green, blue] = currentColor();
@@ -377,7 +387,7 @@ colorInput.addEventListener("input", throttledInput(async () => {
   updateRgbReadout();
   activeMode = "color";
   hasControlledLamp = true;
-  await controller.color(...hexToRgb(hex));
+  await controller.color(...outputColor(hexToRgb(hex)));
   powerOn = true;
   updatePowerUi();
   saveSettings();
@@ -448,7 +458,7 @@ async function startMusic() {
       $("#level-meter i").setAttribute("style", `transform:scaleX(${Math.max(0.02, level)})`);
       if (time - lastSent > 110) {
         const [red, green, blue] = currentColor();
-        void run(() => controller.color(red * level, green * level, blue * level));
+        void run(() => controller.color(...outputColor([red * level, green * level, blue * level])));
         lastSent = time;
       }
       musicFrame = requestAnimationFrame(tick);
@@ -528,12 +538,22 @@ $<HTMLSelectElement>("#rgb-order").addEventListener("change", (event) => {
   if (controller.connected) void run(async () => {
     activeMode = "color";
     hasControlledLamp = true;
-    await controller.color(...currentColor());
+    await controller.color(...currentOutputColor());
     powerOn = true;
     updatePowerUi();
   }, "Порядок каналов применён");
 });
 $<HTMLInputElement>("#pixels").addEventListener("change", saveSettings);
+$<HTMLInputElement>("#color-correction").addEventListener("change", () => {
+  saveSettings();
+  if (controller.connected) void run(async () => {
+    activeMode = "color";
+    hasControlledLamp = true;
+    await controller.color(...currentOutputColor());
+    powerOn = true;
+    updatePowerUi();
+  }, "Цветокоррекция применена");
+});
 $("#apply-strip").addEventListener("click", () => void run(() => {
   const pixels = Number($<HTMLInputElement>("#pixels").value);
   const order = $<HTMLSelectElement>("#rgb-order").selectedIndex + 1;
@@ -548,7 +568,7 @@ all<HTMLButtonElement>(".channel-test").forEach((button) => button.addEventListe
   updateRgbReadout();
   activeMode = "color";
   hasControlledLamp = true;
-  await controller.color(...hexToRgb(color));
+  await controller.color(...outputColor(hexToRgb(color)));
   powerOn = true;
   updatePowerUi();
   saveSettings();

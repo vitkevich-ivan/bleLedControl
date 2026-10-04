@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { hexToRgb, srgbToLedRgb } from "./color";
 import { detectProfile, LedProtocol } from "./protocol";
 
 const bytes = (value: Uint8Array) => [...value];
@@ -32,6 +33,18 @@ describe("LedProtocol", () => {
   it("maps an orange picker value to the calibrated RBG payload", () => {
     const protocol = new LedProtocol("ble");
     expect(bytes(protocol.color(255, 149, 0)).slice(4, 7)).toEqual([255, 0, 149]);
+  });
+
+  it.each([
+    ["#ff3b30", [255, 8, 11]],
+    ["#ff9500", [255, 0, 77]],
+    ["#ffd60a", [255, 1, 171]],
+    ["#34c759", [9, 25, 146]],
+    ["#00c7be", [0, 131, 146]],
+  ])("sends corrected preset %s in RBG wire order", (hex, expected) => {
+    const protocol = new LedProtocol("ble");
+    const frame = protocol.color(...srgbToLedRgb(hexToRgb(hex as string)));
+    expect(bytes(frame).slice(4, 7)).toEqual(expected);
   });
 
   it("builds regular DMX frames", () => {
