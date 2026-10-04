@@ -31,6 +31,15 @@ function clamp(value: number) {
   return Math.max(0, Math.min(255, Math.round(value)));
 }
 
+export function limitRgbStep(previous: RgbColor, target: RgbColor, maxStep: number): RgbColor {
+  const approach = (from: number, to: number) => clamp(from + Math.max(-maxStep, Math.min(maxStep, to - from)));
+  return [
+    approach(previous[0], target[0]),
+    approach(previous[1], target[1]),
+    approach(previous[2], target[2]),
+  ];
+}
+
 function mix(from: RgbColor, to: RgbColor, amount: number): RgbColor {
   return [
     clamp(from[0] + (to[0] - from[0]) * amount),
@@ -64,7 +73,7 @@ export function customEffectFrame(effect: CustomEffect, elapsedMs: number, speed
   }
 
   const normalizedSpeed = Math.max(0, Math.min(100, speed));
-  const duration = 18_000 - normalizedSpeed * 140;
+  const duration = 30_000 - normalizedSpeed * 200;
   const rawProgress = (elapsedMs % duration) / duration;
 
   if (effect.kind === "dawn" || effect.kind === "sunset") {
@@ -72,11 +81,11 @@ export function customEffectFrame(effect: CustomEffect, elapsedMs: number, speed
     return colorAt(effect.colors, Math.min(0.999999, elapsedMs / transitionDuration));
   }
   if (effect.kind === "flicker") {
-    const drift = (1 - Math.cos(elapsedMs / 2_400 * Math.PI * 2)) / 2;
+    const drift = (1 - Math.cos(elapsedMs / 4_800 * Math.PI * 2)) / 2;
     const base = colorAt(effect.colors, drift);
-    const intensity = 0.88
-      + Math.sin(elapsedMs / 430 * Math.PI * 2) * 0.07
-      + Math.sin(elapsedMs / 170 * Math.PI * 2) * 0.03;
+    const intensity = 0.91
+      + Math.sin(elapsedMs / 1_400 * Math.PI * 2) * 0.035
+      + Math.sin(elapsedMs / 530 * Math.PI * 2) * 0.015;
     return [clamp(base[0] * intensity), clamp(base[1] * intensity), clamp(base[2] * intensity)];
   }
 

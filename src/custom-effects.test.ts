@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { customEffectFrame, customEffects } from "./custom-effects";
+import { customEffectFrame, customEffects, limitRgbStep } from "./custom-effects";
 
 describe("customEffectFrame", () => {
   it("interpolates a cycle without exceeding RGB bounds", () => {
@@ -10,8 +10,8 @@ describe("customEffectFrame", () => {
 
   it("keeps a cycle smooth where its last color wraps to the first", () => {
     const effect = customEffects.find(({ id }) => id === "party")!;
-    const beforeWrap = customEffectFrame(effect, 10_910, 50);
-    const afterWrap = customEffectFrame(effect, 11_000, 50);
+    const beforeWrap = customEffectFrame(effect, 19_850, 50);
+    const afterWrap = customEffectFrame(effect, 20_000, 50);
     expect(Math.max(...beforeWrap.map((channel, index) => Math.abs(channel - afterWrap[index])))).toBeLessThan(4);
   });
 
@@ -28,5 +28,9 @@ describe("customEffectFrame", () => {
     const later = customEffectFrame(effect, 90_000, 0);
     expect(later[0]).toBeGreaterThan(start[0]);
     expect(later[1]).toBeGreaterThan(start[1]);
+  });
+
+  it("limits every outgoing channel step", () => {
+    expect(limitRgbStep([20, 200, 100], [255, 0, 106], 10)).toEqual([30, 190, 106]);
   });
 });

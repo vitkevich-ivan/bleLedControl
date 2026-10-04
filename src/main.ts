@@ -2,7 +2,7 @@ import "./styles.css";
 import { registerSW } from "virtual:pwa-register";
 import { BleLampController, type ControllerSnapshot } from "./ble-controller";
 import { analogEffects, dmxEffects, effectPalette } from "./effects";
-import { customEffectFrame, customEffects } from "./custom-effects";
+import { customEffectFrame, customEffects, limitRgbStep } from "./custom-effects";
 import type { ProtocolKind, RgbOrder } from "./protocol";
 import { applyChannelBalance, hexToRgb, srgbToLedRgb, type RgbColor } from "./color";
 
@@ -154,7 +154,7 @@ app.innerHTML = `
         <button id="clear-log" class="text-button">Очистить журнал</button>
       </details>
       <section class="card about">
-        <strong>Luma BLE <span>v0.3.1</span></strong>
+        <strong>Luma BLE <span>v0.3.2</span></strong>
         <p>Работает локально. Команды и звук не отправляются на сервер.</p>
       </section>
     </div>
@@ -183,6 +183,7 @@ let activeCustomEffect = "";
 let customEffectTimer = 0;
 let customEffectGeneration = 0;
 let customEffectStartedAt = 0;
+let lastCustomOutput: RgbColor | undefined;
 let showAllEffects = false;
 let activeMicMode = 1;
 let reverseDirection = false;
@@ -354,12 +355,14 @@ function startCustomEffect(effectId: string, announce = true) {
   const effect = customEffects.find(({ id }) => id === effectId);
   if (!effect) return;
 
+  const continuing = activeMode === "custom-effect" && activeCustomEffect === effect.id && lastCustomOutput;
   stopCustomEffect(false);
   activeCustomEffect = effect.id;
   activeMode = "custom-effect";
   hasControlledLamp = true;
   powerOn = true;
   customEffectStartedAt = performance.now();
+  if (!continuing) lastCustomOutput = currentOutputColor();
   const generation = ++customEffectGeneration;
   updatePowerUi();
   populateEffects(controller.addressable, controller.connected);
@@ -370,13 +373,16 @@ function startCustomEffect(effectId: string, announce = true) {
     if (controller.connected) {
       try {
         const frame = customEffectFrame(effect, performance.now() - customEffectStartedAt, Number($<HTMLInputElement>("#speed").value));
-        await controller.color(...outputColor(frame));
+        const target = outputColor(frame);
+        const outgoing = lastCustomOutput ? limitRgbStep(lastCustomOutput, target, 10) : target;
+        await controller.color(...outgoing);
+        lastCustomOutput = outgoing;
       } catch (error) {
         addLog(`Атмосферный режим ожидает подключения: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
     if (generation === customEffectGeneration && activeMode === "custom-effect") {
-      customEffectTimer = window.setTimeout(() => void tick(), 90);
+      customEffectTimer = window.setTimeout(() => void tick(), 150);
     }
   };
 
