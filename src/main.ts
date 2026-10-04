@@ -157,7 +157,7 @@ app.innerHTML = `
         <button id="clear-log" class="text-button">Очистить журнал</button>
       </details>
       <section class="card about">
-        <strong>Luma BLE <span>v0.4.0</span></strong>
+        <strong>Luma BLE <span>v0.5.0</span></strong>
         <p>Работает локально. Команды и звук не отправляются на сервер.</p>
       </section>
     </div>
@@ -185,7 +185,8 @@ let activeEffect = 135;
 let activeCustomEffect = "";
 let customEffectTimer = 0;
 let customEffectGeneration = 0;
-let customEffectStartedAt = 0;
+let customEffectElapsedMs = 0;
+let customEffectLastTickAt = 0;
 let lastCustomOutput: RgbColor | undefined;
 let showAllEffects = false;
 let activeMicMode = 1;
@@ -196,6 +197,11 @@ let audioContext: AudioContext | undefined;
 let musicFrame = 0;
 let timerInterval = 0;
 let timerDeadline = 0;
+let timerPowerOffPending = false;
+let timerPowerOffInFlight = false;
+let resumeMusicAfterVisibility = false;
+
+const TIMER_STORAGE_KEY = "luma-timer-deadline";
 
 interface SavedSettings {
   version?: number;
@@ -225,7 +231,7 @@ function updateConnection(snapshot: ControllerSnapshot) {
   const connected = snapshot.state === "connected";
   const busy = snapshot.state === "connecting" || snapshot.state === "syncing";
   $("#device-name").textContent = snapshot.deviceName;
-  $("#device-meta").textContent = connected ? `${snapshot.profileLabel} · синхронизировано` : stateText(snapshot.state);
+  $("#device-meta").textContent = connected ? `${snapshot.profileLabel} · подключено без обратной связи` : stateText(snapshot.state);
   $("#status-dot").className = `status-dot ${connected ? "online" : busy ? "busy" : ""}`;
   $("#connect").textContent = busy ? "Подключение…" : snapshot.state === "disconnected" || snapshot.state === "paused" ? "Подключить снова" : "Найти лампу";
   ($("#connect") as HTMLButtonElement).disabled = busy;
@@ -236,6 +242,11 @@ function updateConnection(snapshot: ControllerSnapshot) {
   $("#pixel-settings").classList.toggle("hidden", !addressable);
   populateEffects(addressable, connected);
   renderCustomEffects(connected);
+  if (connected && timerPowerOffPending) void run(flushPendingTimerPowerOff);
+  if (connected && resumeMusicAfterVisibility && !document.hidden) {
+    resumeMusicAfterVisibility = false;
+    void startMusic();
+  }
 }
 
 function stateText(state: ControllerSnapshot["state"]) {
@@ -354,7 +365,10 @@ function stopCustomEffect(resetMode = true) {
   customEffectGeneration += 1;
   window.clearTimeout(customEffectTimer);
   customEffectTimer = 0;
-  if (resetMode && activeMode === "custom-effect") activeMode = "color";
+  if (resetMode && activeMode === "custom-effect") {
+    activeMode = "color";
+    customEffectElapsedMs = 0;
+  }
   renderCustomEffects(controller.connected);
 }
 
@@ -362,14 +376,17 @@ function startCustomEffect(effectId: string, announce = true) {
   const effect = customEffects.find(({ id }) => id === effectId);
   if (!effect) return;
 
-  const continuing = activeMode === "custom-effect" && activeCustomEffect === effect.id && lastCustomOutput;
+  const continuing = Boolean(activeMode === "custom-effect" && activeCustomEffect === effect.id && lastCustomOutput);
   stopCustomEffect(false);
   activeCustomEffect = effect.id;
   activeMode = "custom-effect";
   hasControlledLamp = true;
   powerOn = true;
-  customEffectStartedAt = performance.now();
-  if (!continuing) lastCustomOutput = currentOutputColor();
+  if (!continuing) {
+    lastCustomOutput = currentOutputColor();
+    customEffectElapsedMs = 0;
+  }
+  customEffectLastTickAt = performance.now();
   const generation = ++customEffectGeneration;
   updatePowerUi();
   populateEffects(controller.addressable, controller.connected);
@@ -377,16 +394,22 @@ function startCustomEffect(effectId: string, announce = true) {
 
   const tick = async () => {
     if (generation !== customEffectGeneration || activeMode !== "custom-effect") return;
+    if (document.hidden) return;
+    const now = performance.now();
+    customEffectElapsedMs += Math.min(500, Math.max(0, now - customEffectLastTickAt));
+    customEffectLastTickAt = now;
     if (controller.connected) {
       try {
-        const frame = customEffectFrame(effect, performance.now() - customEffectStartedAt, Number($<HTMLInputElement>("#speed").value));
+        const frame = customEffectFrame(effect, customEffectElapsedMs, Number($<HTMLInputElement>("#speed").value));
         const target = outputColor(frame);
         const maxStep = smoothnessToMaxStep(Number($<HTMLInputElement>("#smoothness").value));
         const outgoing = lastCustomOutput ? limitRgbStep(lastCustomOutput, target, maxStep) : target;
         await controller.color(...outgoing);
         lastCustomOutput = outgoing;
       } catch (error) {
-        addLog(`Атмосферный режим ожидает подключения: ${error instanceof Error ? error.message : String(error)}`);
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          addLog(`Атмосферный режим ожидает подключения: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     }
     if (generation === customEffectGeneration && activeMode === "custom-effect") {
@@ -427,7 +450,7 @@ function updatePowerUi() {
   const isOn = powerOn === true;
   $("#power").classList.toggle("on", isOn);
   $("#power").setAttribute("aria-pressed", String(isOn));
-  $("#power-label").textContent = powerOn === null ? "Состояние не определено" : isOn ? "Включено" : "Выключено";
+  $("#power-label").textContent = powerOn === null ? "Состояние лампы неизвестно" : isOn ? "Задано: включено" : "Задано: выключено";
 }
 
 function effectDescription(name: string) {
@@ -678,6 +701,8 @@ all<HTMLButtonElement>(".mic-mode").forEach((button) => button.addEventListener(
 $("#timer-start").addEventListener("click", () => {
   const minutes = Math.max(1, Math.min(1440, Number($<HTMLInputElement>("#timer-minutes").value) || 1));
   timerDeadline = Date.now() + minutes * 60_000;
+  timerPowerOffPending = false;
+  persistTimerDeadline();
   window.clearInterval(timerInterval);
   timerInterval = window.setInterval(updateTimer, 1000);
   ($("#timer-cancel") as HTMLButtonElement).disabled = false;
@@ -685,18 +710,14 @@ $("#timer-start").addEventListener("click", () => {
   showToast(`Выключение через ${minutes} мин.`);
 });
 
-$("#timer-cancel").addEventListener("click", cancelTimer);
+$("#timer-cancel").addEventListener("click", () => cancelTimer());
 
 function updateTimer() {
   const left = timerDeadline - Date.now();
   if (left <= 0) {
-    cancelTimer();
-    void run(async () => {
-      await controller.power(false);
-      powerOn = false;
-      hasControlledLamp = true;
-      updatePowerUi();
-    }, "Лампа выключена по таймеру");
+    finishTimerCountdown();
+    timerPowerOffPending = true;
+    void run(flushPendingTimerPowerOff);
     return;
   }
   const totalSeconds = Math.ceil(left / 1000);
@@ -706,11 +727,59 @@ function updateTimer() {
   $("#timer-countdown").textContent = [hours, minutes, seconds].map((item) => String(item).padStart(2, "0")).join(":");
 }
 
-function cancelTimer() {
+function cancelTimer(clearStored = true) {
   window.clearInterval(timerInterval);
   timerDeadline = 0;
+  timerPowerOffPending = false;
   $("#timer-countdown").textContent = "—";
   ($("#timer-cancel") as HTMLButtonElement).disabled = true;
+  if (clearStored) {
+    try { localStorage.removeItem(TIMER_STORAGE_KEY); } catch { /* Storage may be unavailable. */ }
+  }
+}
+
+function persistTimerDeadline() {
+  try { localStorage.setItem(TIMER_STORAGE_KEY, String(timerDeadline)); } catch { /* Storage may be unavailable. */ }
+}
+
+function finishTimerCountdown() {
+  window.clearInterval(timerInterval);
+  timerDeadline = 0;
+  $("#timer-countdown").textContent = "Ожидает лампу";
+  ($("#timer-cancel") as HTMLButtonElement).disabled = true;
+}
+
+async function flushPendingTimerPowerOff() {
+  if (!timerPowerOffPending || timerPowerOffInFlight || !controller.connected) return;
+  timerPowerOffInFlight = true;
+  try {
+    await controller.power(false);
+    timerPowerOffPending = false;
+    powerOn = false;
+    hasControlledLamp = true;
+    $("#timer-countdown").textContent = "—";
+    try { localStorage.removeItem(TIMER_STORAGE_KEY); } catch { /* Storage may be unavailable. */ }
+    updatePowerUi();
+    showToast("Лампа выключена по таймеру");
+  } finally {
+    timerPowerOffInFlight = false;
+  }
+}
+
+function restoreTimer() {
+  let storedDeadline = 0;
+  try { storedDeadline = Number(localStorage.getItem(TIMER_STORAGE_KEY)) || 0; } catch { return; }
+  if (!storedDeadline) return;
+  timerDeadline = storedDeadline;
+  if (timerDeadline <= Date.now()) {
+    finishTimerCountdown();
+    timerPowerOffPending = true;
+    return;
+  }
+  window.clearInterval(timerInterval);
+  timerInterval = window.setInterval(updateTimer, 1_000);
+  ($("#timer-cancel") as HTMLButtonElement).disabled = false;
+  updateTimer();
 }
 
 $<HTMLSelectElement>("#protocol").addEventListener("change", (event) => {
@@ -796,8 +865,37 @@ $("#install-help").addEventListener("click", () => dialog.showModal());
 all(".dialog-close, .dialog-ok").forEach((button) => button.addEventListener("click", () => dialog.close()));
 dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.close(); });
 
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    if (activeMode === "custom-effect") {
+      customEffectGeneration += 1;
+      window.clearTimeout(customEffectTimer);
+      customEffectTimer = 0;
+      addLog("Атмосферный режим приостановлен в фоне");
+    }
+    if (musicRunning) {
+      resumeMusicAfterVisibility = true;
+      stopMusic();
+      addLog("Микрофон приостановлен в фоне");
+    }
+    return;
+  }
+
+  if (timerDeadline) updateTimer();
+  if (latestSnapshot?.state === "disconnected") void run(() => controller.reconnect());
+  if (activeMode === "custom-effect") {
+    startCustomEffect(activeCustomEffect, false);
+    addLog("Атмосферный режим продолжен");
+  }
+  if (resumeMusicAfterVisibility && controller.connected) {
+    resumeMusicAfterVisibility = false;
+    void startMusic();
+  }
+});
+
 $("#browser-warning").classList.toggle("hidden", Boolean(navigator.bluetooth));
 restoreSettings();
+restoreTimer();
 $("#color-preview").setAttribute("style", `--selected-color:${$<HTMLInputElement>("#color").value}`);
 updateRgbReadout();
 updateBalanceReadouts();

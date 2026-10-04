@@ -1,4 +1,5 @@
 import { bytesToHex, detectProfile, LedProtocol, type ProtocolKind, type RgbOrder } from "./protocol";
+import { CommandScheduler, type CommandKey } from "./command-scheduler";
 
 const SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb";
 const CHARACTERISTIC_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb";
@@ -11,6 +12,13 @@ export interface ControllerSnapshot {
   deviceName: string;
   profileLabel: string;
   protocolKind: ProtocolKind;
+  stateFeedback: "unavailable";
+}
+
+interface ScheduledFrame {
+  frame: Uint8Array;
+  session: number;
+  key?: CommandKey;
 }
 
 type StateListener = (snapshot: ControllerSnapshot) => void;
@@ -21,19 +29,22 @@ export class BleLampController {
   private characteristic?: BluetoothRemoteGATTCharacteristic;
   private protocol = new LedProtocol("ble");
   private state: ConnectionState = navigator.bluetooth ? "idle" : "unsupported";
-  private writeTail = Promise.resolve();
+  private readonly scheduler: CommandScheduler<ScheduledFrame>;
   private lastWriteAt = 0;
   private forcedKind: ProtocolKind | "auto" = "auto";
   private manualDisconnect = false;
   private reconnectTimer = 0;
   private reconnectAttempt = 0;
   private session = 0;
+  private lastStreamLogAt = 0;
+  private suppressedStreamLogs = 0;
 
   constructor(
     private readonly onState: StateListener,
     private readonly onLog: LogListener,
     private readonly onRestore: () => Promise<void> = async () => undefined,
   ) {
+    this.scheduler = new CommandScheduler((command) => this.performWrite(command));
     this.emitState();
   }
 
@@ -104,16 +115,16 @@ export class BleLampController {
     this.manualDisconnect = true;
     window.clearTimeout(this.reconnectTimer);
     this.session += 1;
-    this.writeTail = Promise.resolve();
+    this.scheduler.reset();
     this.device?.gatt?.disconnect();
     this.characteristic = undefined;
     this.setState("paused");
   }
 
   power(on: boolean) { return this.write(this.protocol.power(on)); }
-  color(red: number, green: number, blue: number) { return this.write(this.protocol.color(red, green, blue)); }
-  brightness(value: number) { return this.write(this.protocol.brightness(value)); }
-  speed(value: number) { return this.write(this.protocol.speed(value)); }
+  color(red: number, green: number, blue: number) { return this.write(this.protocol.color(red, green, blue), "color"); }
+  brightness(value: number) { return this.write(this.protocol.brightness(value), "brightness"); }
+  speed(value: number) { return this.write(this.protocol.speed(value), "speed"); }
   effect(value: number) { return this.write(this.protocol.effect(value)); }
   direction(reverse: boolean) { return this.write(this.protocol.direction(reverse)); }
   hardwareMic(mode: number) { return this.write(this.protocol.hardwareMic(mode)); }
@@ -125,7 +136,7 @@ export class BleLampController {
     const service = await server.getPrimaryService(SERVICE_UUID);
     this.characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
     this.session += 1;
-    this.writeTail = Promise.resolve();
+    this.scheduler.reset();
     this.reconnectAttempt = 0;
     this.setState("syncing");
     await this.onRestore();
@@ -142,13 +153,17 @@ export class BleLampController {
     this.emitState();
   }
 
-  private write(frame: Uint8Array) {
-    const queuedSession = this.session;
-    this.writeTail = this.writeTail.catch(() => undefined).then(async () => {
-      if (queuedSession !== this.session) throw new DOMException("Устаревшая команда отменена", "AbortError");
+  private write(frame: Uint8Array, key?: CommandKey) {
+    return this.scheduler.enqueue({ frame: new Uint8Array(frame), session: this.session, key }, key);
+  }
+
+  private async performWrite({ frame, session, key }: ScheduledFrame) {
+    try {
+      if (session !== this.session) throw new DOMException("Устаревшая команда отменена", "AbortError");
       if (!this.characteristic || !this.connected) throw new Error("Лампа не подключена");
       const wait = Math.max(0, WRITE_INTERVAL_MS - (Date.now() - this.lastWriteAt));
       if (wait) await new Promise((resolve) => window.setTimeout(resolve, wait));
+      if (session !== this.session) throw new DOMException("Устаревшая команда отменена", "AbortError");
       const payload = new Uint8Array(frame);
       if (this.characteristic.properties.writeWithoutResponse) {
         await this.characteristic.writeValueWithoutResponse(payload);
@@ -156,19 +171,31 @@ export class BleLampController {
         await this.characteristic.writeValue(payload);
       }
       this.lastWriteAt = Date.now();
-      this.onLog(`TX ${bytesToHex(frame)}`);
-    }).catch((error: unknown) => {
+      if (session !== this.session) throw new DOMException("Устаревшая команда отменена", "AbortError");
+      this.logTransmission(frame, Boolean(key));
+    } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
         this.onLog(`Ошибка записи: ${error instanceof Error ? error.message : String(error)}`);
       }
       throw error;
-    });
-    return this.writeTail;
+    }
+  }
+
+  private logTransmission(frame: Uint8Array, streaming: boolean) {
+    const now = Date.now();
+    if (!streaming || now - this.lastStreamLogAt >= 1_000) {
+      const suffix = this.suppressedStreamLogs ? ` · пропущено ${this.suppressedStreamLogs}` : "";
+      this.onLog(`TX ${bytesToHex(frame)}${suffix}`);
+      this.lastStreamLogAt = now;
+      this.suppressedStreamLogs = 0;
+    } else {
+      this.suppressedStreamLogs += 1;
+    }
   }
 
   private handleDisconnect = () => {
     this.session += 1;
-    this.writeTail = Promise.resolve();
+    this.scheduler.reset();
     this.characteristic = undefined;
     if (this.manualDisconnect) {
       this.setState("paused");
@@ -211,6 +238,7 @@ export class BleLampController {
       deviceName: this.device?.name ?? "Лампа не выбрана",
       profileLabel: this.forcedKind === "auto" ? profile.label : this.protocol.kind,
       protocolKind: this.protocol.kind,
+      stateFeedback: "unavailable",
     });
   }
 }
