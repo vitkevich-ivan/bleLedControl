@@ -10,8 +10,8 @@ describe("customEffectFrame", () => {
 
   it("keeps a cycle smooth where its last color wraps to the first", () => {
     const effect = customEffects.find(({ id }) => id === "party")!;
-    const beforeWrap = customEffectFrame(effect, 19_850, 50);
-    const afterWrap = customEffectFrame(effect, 20_000, 50);
+    const beforeWrap = customEffectFrame(effect, 28_380, 50);
+    const afterWrap = customEffectFrame(effect, 28_500, 50);
     expect(Math.max(...beforeWrap.map((channel, index) => Math.abs(channel - afterWrap[index])))).toBeLessThan(4);
   });
 
@@ -31,6 +31,6 @@ describe("customEffectFrame", () => {
   });
 
   it("limits every outgoing channel step", () => {
-    expect(limitRgbStep([20, 200, 100], [255, 0, 106], 10)).toEqual([30, 190, 106]);
+    expect(limitRgbStep([20, 200, 100], [255, 0, 106], 4)).toEqual([24, 196, 104]);
   });
 });

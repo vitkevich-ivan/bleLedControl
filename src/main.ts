@@ -154,7 +154,7 @@ app.innerHTML = `
         <button id="clear-log" class="text-button">Очистить журнал</button>
       </details>
       <section class="card about">
-        <strong>Luma BLE <span>v0.3.2</span></strong>
+        <strong>Luma BLE <span>v0.3.3</span></strong>
         <p>Работает локально. Команды и звук не отправляются на сервер.</p>
       </section>
     </div>
@@ -374,7 +374,7 @@ function startCustomEffect(effectId: string, announce = true) {
       try {
         const frame = customEffectFrame(effect, performance.now() - customEffectStartedAt, Number($<HTMLInputElement>("#speed").value));
         const target = outputColor(frame);
-        const outgoing = lastCustomOutput ? limitRgbStep(lastCustomOutput, target, 10) : target;
+        const outgoing = lastCustomOutput ? limitRgbStep(lastCustomOutput, target, 4) : target;
         await controller.color(...outgoing);
         lastCustomOutput = outgoing;
       } catch (error) {
@@ -382,7 +382,7 @@ function startCustomEffect(effectId: string, announce = true) {
       }
     }
     if (generation === customEffectGeneration && activeMode === "custom-effect") {
-      customEffectTimer = window.setTimeout(() => void tick(), 150);
+      customEffectTimer = window.setTimeout(() => void tick(), 120);
     }
   };
 

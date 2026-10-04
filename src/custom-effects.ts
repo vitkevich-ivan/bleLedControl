@@ -73,7 +73,7 @@ export function customEffectFrame(effect: CustomEffect, elapsedMs: number, speed
   }
 
   const normalizedSpeed = Math.max(0, Math.min(100, speed));
-  const duration = 30_000 - normalizedSpeed * 200;
+  const duration = 42_000 - normalizedSpeed * 270;
   const rawProgress = (elapsedMs % duration) / duration;
 
   if (effect.kind === "dawn" || effect.kind === "sunset") {
