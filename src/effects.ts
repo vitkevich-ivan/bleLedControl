@@ -3,6 +3,34 @@ export interface EffectOption {
   name: string;
 }
 
+const rainbowPalette = ["#ff3b30", "#ff9f0a", "#ffd60a", "#30d158", "#00c7be", "#0a84ff", "#bf5af2"] as const;
+const namedColors = [
+  ["красн", "#ff3b30"],
+  ["зелён", "#30d158"],
+  ["син", "#0a84ff"],
+  ["жёлт", "#ffd60a"],
+  ["бирюз", "#00c7be"],
+  ["фиолет", "#bf5af2"],
+  ["бел", "#f5f7ff"],
+] as const;
+
+export function effectPalette({ id, name }: EffectOption): readonly string[] {
+  const normalized = name.toLocaleLowerCase("ru-RU");
+  if (/семи|раду|авто/.test(normalized)) return rainbowPalette;
+  if (/трёхцвет|rgb/.test(normalized)) return ["#ff3b30", "#30d158", "#0a84ff"];
+  if (normalized.includes("мечта")) return ["#6e5cff", "#22d3c5", "#ff5bbd"];
+
+  const found = namedColors
+    .map(([token, color]) => ({ color, position: normalized.indexOf(token) }))
+    .filter(({ position }) => position >= 0)
+    .sort((left, right) => left.position - right.position)
+    .map(({ color }) => color);
+  if (found.length) return found.length === 1 ? [found[0], found[0]] : found;
+
+  const hue = (id * 47) % 360;
+  return [`hsl(${hue} 76% 52%)`, `hsl(${(hue + 55) % 360} 72% 42%)`];
+}
+
 export const analogEffects: EffectOption[] = [
   [135, "Трёхцветные скачки"],
   [136, "Семицветные скачки"],

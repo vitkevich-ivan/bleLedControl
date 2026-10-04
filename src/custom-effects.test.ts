@@ -8,9 +8,18 @@ describe("customEffectFrame", () => {
     expect(customEffectFrame(effect, 5_500, 50).every((channel) => channel >= 0 && channel <= 255)).toBe(true);
   });
 
-  it("creates deterministic candle flicker with an injected random source", () => {
+  it("keeps a cycle smooth where its last color wraps to the first", () => {
+    const effect = customEffects.find(({ id }) => id === "party")!;
+    const beforeWrap = customEffectFrame(effect, 10_910, 50);
+    const afterWrap = customEffectFrame(effect, 11_000, 50);
+    expect(Math.max(...beforeWrap.map((channel, index) => Math.abs(channel - afterWrap[index])))).toBeLessThan(4);
+  });
+
+  it("creates candle flicker without random frame jumps", () => {
     const effect = customEffects.find(({ id }) => id === "candle")!;
-    expect(customEffectFrame(effect, 0, 50, () => 0)).toEqual([184, 56, 6]);
+    const first = customEffectFrame(effect, 1_000, 50);
+    const next = customEffectFrame(effect, 1_090, 50);
+    expect(Math.max(...first.map((channel, index) => Math.abs(channel - next[index])))).toBeLessThan(18);
   });
 
   it("moves dawn from dark red toward daylight", () => {

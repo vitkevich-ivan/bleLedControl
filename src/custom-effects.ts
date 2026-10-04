@@ -39,13 +39,24 @@ function mix(from: RgbColor, to: RgbColor, amount: number): RgbColor {
   ];
 }
 
+function smoothstep(value: number) {
+  const normalized = Math.max(0, Math.min(1, value));
+  return normalized * normalized * (3 - 2 * normalized);
+}
+
 function colorAt(colors: readonly RgbColor[], progress: number): RgbColor {
   const position = Math.max(0, Math.min(0.999999, progress)) * (colors.length - 1);
   const index = Math.floor(position);
-  return mix(colors[index], colors[Math.min(colors.length - 1, index + 1)], position - index);
+  return mix(colors[index], colors[Math.min(colors.length - 1, index + 1)], smoothstep(position - index));
 }
 
-export function customEffectFrame(effect: CustomEffect, elapsedMs: number, speed: number, random = Math.random): RgbColor {
+function cyclicColorAt(colors: readonly RgbColor[], progress: number): RgbColor {
+  const position = ((progress % 1) + 1) % 1 * colors.length;
+  const index = Math.floor(position);
+  return mix(colors[index], colors[(index + 1) % colors.length], smoothstep(position - index));
+}
+
+export function customEffectFrame(effect: CustomEffect, elapsedMs: number, speed: number): RgbColor {
   if (effect.kind === "circadian") {
     const hour = new Date().getHours() + new Date().getMinutes() / 60;
     const progress = hour < 7 ? 0 : hour < 13 ? (hour - 7) / 12 : hour < 19 ? 0.5 + (hour - 13) / 12 : 1;
@@ -61,12 +72,14 @@ export function customEffectFrame(effect: CustomEffect, elapsedMs: number, speed
     return colorAt(effect.colors, Math.min(0.999999, elapsedMs / transitionDuration));
   }
   if (effect.kind === "flicker") {
-    const base = effect.colors[Math.floor(random() * effect.colors.length)] ?? effect.colors[0];
-    const intensity = 0.72 + random() * 0.28;
+    const drift = (1 - Math.cos(elapsedMs / 2_400 * Math.PI * 2)) / 2;
+    const base = colorAt(effect.colors, drift);
+    const intensity = 0.88
+      + Math.sin(elapsedMs / 430 * Math.PI * 2) * 0.07
+      + Math.sin(elapsedMs / 170 * Math.PI * 2) * 0.03;
     return [clamp(base[0] * intensity), clamp(base[1] * intensity), clamp(base[2] * intensity)];
   }
 
   const wave = effect.kind === "breathe" ? (1 - Math.cos(rawProgress * Math.PI * 2)) / 2 : rawProgress;
-  const paletteProgress = effect.kind === "breathe" ? wave : rawProgress;
-  return colorAt(effect.colors, paletteProgress);
+  return effect.kind === "breathe" ? colorAt(effect.colors, wave) : cyclicColorAt(effect.colors, rawProgress);
 }

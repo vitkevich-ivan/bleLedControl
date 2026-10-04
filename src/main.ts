@@ -1,7 +1,7 @@
 import "./styles.css";
 import { registerSW } from "virtual:pwa-register";
 import { BleLampController, type ControllerSnapshot } from "./ble-controller";
-import { analogEffects, dmxEffects } from "./effects";
+import { analogEffects, dmxEffects, effectPalette } from "./effects";
 import { customEffectFrame, customEffects } from "./custom-effects";
 import type { ProtocolKind, RgbOrder } from "./protocol";
 import { applyChannelBalance, hexToRgb, srgbToLedRgb, type RgbColor } from "./color";
@@ -154,7 +154,7 @@ app.innerHTML = `
         <button id="clear-log" class="text-button">Очистить журнал</button>
       </details>
       <section class="card about">
-        <strong>Luma BLE <span>v0.3.0</span></strong>
+        <strong>Luma BLE <span>v0.3.1</span></strong>
         <p>Работает локально. Команды и звук не отправляются на сервер.</p>
       </section>
     </div>
@@ -376,7 +376,7 @@ function startCustomEffect(effectId: string, announce = true) {
       }
     }
     if (generation === customEffectGeneration && activeMode === "custom-effect") {
-      customEffectTimer = window.setTimeout(() => void tick(), 180);
+      customEffectTimer = window.setTimeout(() => void tick(), 90);
     }
   };
 
@@ -426,9 +426,9 @@ function effectDescription(name: string) {
   return "Динамическое свечение";
 }
 
-function effectGradient(id: number) {
-  const hue = (id * 47) % 360;
-  return `linear-gradient(135deg, hsl(${hue} 88% 58%), hsl(${(hue + 75) % 360} 82% 45%))`;
+function effectGradient(id: number, name: string) {
+  const direction = name.toLocaleLowerCase("ru-RU").includes("назад") ? "315deg" : "135deg";
+  return `linear-gradient(${direction}, ${effectPalette({ id, name }).join(",")})`;
 }
 
 function populateEffects(addressable: boolean, connected = latestSnapshot?.state === "connected") {
@@ -447,7 +447,7 @@ function populateEffects(addressable: boolean, connected = latestSnapshot?.state
     button.disabled = !connected;
     button.setAttribute("aria-pressed", String(activeMode === "effect" && activeEffect === id));
     button.innerHTML = `<i></i><span><strong></strong><small></small></span><em></em>`;
-    button.querySelector("i")!.setAttribute("style", `--effect-gradient:${effectGradient(id)}`);
+    button.querySelector("i")!.setAttribute("style", `--effect-gradient:${effectGradient(id, name)}`);
     button.querySelector("strong")!.textContent = name;
     button.querySelector("small")!.textContent = effectDescription(name);
     button.querySelector("em")!.textContent = String(id);
