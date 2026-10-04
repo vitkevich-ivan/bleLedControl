@@ -24,9 +24,14 @@ describe("LedProtocol", () => {
     expect(bytes(protocol.color(1, 2, 3)).slice(4, 7)).toEqual([2, 1, 3]);
   });
 
-  it("uses RGB wiring order by default", () => {
+  it("uses the calibrated RBG wiring order by default", () => {
     const protocol = new LedProtocol("ble");
-    expect(bytes(protocol.color(10, 20, 30)).slice(4, 7)).toEqual([10, 20, 30]);
+    expect(bytes(protocol.color(10, 20, 30)).slice(4, 7)).toEqual([10, 30, 20]);
+  });
+
+  it("maps an orange picker value to the calibrated RBG payload", () => {
+    const protocol = new LedProtocol("ble");
+    expect(bytes(protocol.color(255, 149, 0)).slice(4, 7)).toEqual([255, 0, 149]);
   });
 
   it("builds regular DMX frames", () => {

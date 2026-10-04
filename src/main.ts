@@ -3,6 +3,7 @@ import { registerSW } from "virtual:pwa-register";
 import { BleLampController, type ControllerSnapshot } from "./ble-controller";
 import { analogEffects, dmxEffects } from "./effects";
 import type { ProtocolKind, RgbOrder } from "./protocol";
+import { hexToRgb } from "./color";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -115,7 +116,7 @@ app.innerHTML = `
           <option value="dmx-shifted">LEDDMX 02/04 / новый формат</option>
         </select></label>
         <label class="field"><span>Порядок цветов</span><select id="rgb-order">
-          <option selected>RGB</option><option>RBG</option><option>GRB</option><option>GBR</option><option>BRG</option><option>BGR</option>
+          <option>RGB</option><option selected>RBG</option><option>GRB</option><option>GBR</option><option>BRG</option><option>BGR</option>
         </select></label>
         <div class="calibration">
           <span class="eyebrow">Проверка каналов</span>
@@ -137,7 +138,7 @@ app.innerHTML = `
         <button id="clear-log" class="text-button">Очистить журнал</button>
       </details>
       <section class="card about">
-        <strong>Luma BLE <span>v0.2.1</span></strong>
+        <strong>Luma BLE <span>v0.2.2</span></strong>
         <p>Работает локально. Команды и звук не отправляются на сервер.</p>
       </section>
     </div>
@@ -242,7 +243,7 @@ function readSettings(): SavedSettings | undefined {
 
 function saveSettings() {
   const settings: SavedSettings = {
-    version: 3,
+    version: 4,
     color: $<HTMLInputElement>("#color").value,
     brightness: $<HTMLInputElement>("#brightness").value,
     speed: $<HTMLInputElement>("#speed").value,
@@ -261,7 +262,7 @@ function saveSettings() {
 function restoreSettings() {
   const saved = readSettings();
   if (!saved) {
-    controller.setRgbOrder("RGB");
+    controller.setRgbOrder("RBG");
     return;
   }
   $<HTMLInputElement>("#color").value = saved.color || "#7c5cff";
@@ -269,7 +270,7 @@ function restoreSettings() {
   $<HTMLInputElement>("#speed").value = saved.speed || "50";
   $<HTMLInputElement>("#sensitivity").value = saved.sensitivity || "15";
   $<HTMLSelectElement>("#protocol").value = saved.protocol || "auto";
-  const rgbOrder = saved.version === 3 ? (saved.rgbOrder || "RGB") : "RGB";
+  const rgbOrder = saved.version === 4 ? (saved.rgbOrder || "RBG") : "RBG";
   $<HTMLSelectElement>("#rgb-order").value = rgbOrder;
   $<HTMLInputElement>("#pixels").value = saved.pixels || "100";
   $("#color-value").textContent = $<HTMLInputElement>("#color").value.toUpperCase();
@@ -300,11 +301,6 @@ async function run(action: () => Promise<unknown>, success?: string) {
       : error instanceof Error ? error.message : String(error);
     showToast(message, true);
   }
-}
-
-function hexToRgb(hex: string) {
-  const value = Number.parseInt(hex.slice(1), 16);
-  return [(value >> 16) & 255, (value >> 8) & 255, value & 255] as const;
 }
 
 function currentColor() { return hexToRgb(($<HTMLInputElement>("#color")).value); }
