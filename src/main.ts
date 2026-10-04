@@ -19,7 +19,7 @@ app.innerHTML = `
     <section class="hero card">
       <div class="device-state">
         <span id="status-dot" class="status-dot"></span>
-        <div><strong id="device-name">Лампа не выбрана</strong><span id="device-meta">Bluetooth отключён</span></div>
+        <div><strong id="device-name">Лампа не выбрана</strong><span id="device-meta" role="status" aria-live="polite">Готово к поиску</span></div>
       </div>
       <div class="connection-actions">
         <button id="connect" class="primary">Найти лампу</button>
@@ -38,20 +38,21 @@ app.innerHTML = `
       <button class="tab" data-tab="effects">Эффекты</button>
       <button class="tab" data-tab="music">Музыка</button>
       <button class="tab" data-tab="timer">Таймер</button>
-      <button class="tab" data-tab="settings">Настройки</button>
+      <button class="tab" data-tab="settings">Ещё</button>
     </nav>
 
     <div class="tab-panel active" data-panel="light">
       <section class="card power-card">
-        <div><span class="eyebrow">Питание</span><strong id="power-label">Выключено</strong></div>
+        <div><span class="eyebrow">Питание</span><strong id="power-label" role="status">Состояние не определено</strong></div>
         <button id="power" class="power-button" data-connected aria-pressed="false"><span></span></button>
       </section>
 
       <section class="card">
-        <div class="section-heading"><div><span class="eyebrow">Цвет</span><h2>Выберите оттенок</h2></div><output id="color-value">#7C5CFF</output></div>
-        <label class="color-wheel-wrap">
+        <div class="section-heading"><div><span class="eyebrow">Цвет</span><h2>Выберите оттенок</h2></div><div class="color-readout"><output id="color-value">#7C5CFF</output><small id="rgb-value">124 · 92 · 255</small></div></div>
+        <label class="color-wheel-wrap" aria-label="Открыть выбор цвета">
           <input id="color" class="color-wheel" type="color" value="#7c5cff" data-connected />
           <span id="color-preview"></span>
+          <em>Изменить</em>
         </label>
         <div id="presets" class="color-presets" aria-label="Готовые цвета"></div>
       </section>
@@ -114,8 +115,17 @@ app.innerHTML = `
           <option value="dmx-shifted">LEDDMX 02/04 / новый формат</option>
         </select></label>
         <label class="field"><span>Порядок цветов</span><select id="rgb-order">
-          <option>RGB</option><option>RBG</option><option>GRB</option><option>GBR</option><option>BRG</option><option>BGR</option>
+          <option>RGB</option><option>RBG</option><option selected>GRB</option><option>GBR</option><option>BRG</option><option>BGR</option>
         </select></label>
+        <div class="calibration">
+          <span class="eyebrow">Проверка каналов</span>
+          <p class="muted">Каждая кнопка должна зажигать только указанный цвет. Если цвета не совпадают, смените порядок выше.</p>
+          <div class="button-grid calibration-buttons">
+            <button class="channel-test red" data-color="#ff0000" data-connected>Красный</button>
+            <button class="channel-test green" data-color="#00ff00" data-connected>Зелёный</button>
+            <button class="channel-test blue" data-color="#0000ff" data-connected>Синий</button>
+          </div>
+        </div>
         <div id="pixel-settings" class="hidden">
           <label class="field"><span>Количество пикселей</span><input id="pixels" type="number" min="1" max="1024" value="100" inputmode="numeric" /></label>
           <button id="apply-strip" class="secondary wide" data-connected>Передать настройки ленте</button>
@@ -127,7 +137,7 @@ app.innerHTML = `
         <button id="clear-log" class="text-button">Очистить журнал</button>
       </details>
       <section class="card about">
-        <strong>Luma BLE <span>v0.1.0</span></strong>
+        <strong>Luma BLE <span>v0.2.0</span></strong>
         <p>Работает локально. Команды и звук не отправляются на сервер.</p>
       </section>
     </div>
@@ -148,7 +158,12 @@ const all = <T extends Element>(selector: string) => [...document.querySelectorA
 const logElement = $("#log");
 const connectedControls = all<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>("[data-connected]");
 let latestSnapshot: ControllerSnapshot | undefined;
-let powerOn = false;
+let powerOn: boolean | null = null;
+let hasControlledLamp = false;
+let activeMode: "color" | "effect" | "hardware-mic" = "color";
+let activeEffect = 135;
+let activeMicMode = 1;
+let reverseDirection = false;
 let musicRunning = false;
 let musicStream: MediaStream | undefined;
 let audioContext: AudioContext | undefined;
@@ -157,6 +172,7 @@ let timerInterval = 0;
 let timerDeadline = 0;
 
 interface SavedSettings {
+  version?: number;
   color: string;
   brightness: string;
   speed: string;
@@ -176,13 +192,13 @@ function addLog(message: string) {
 function updateConnection(snapshot: ControllerSnapshot) {
   latestSnapshot = snapshot;
   const connected = snapshot.state === "connected";
-  const busy = snapshot.state === "connecting";
+  const busy = snapshot.state === "connecting" || snapshot.state === "syncing";
   $("#device-name").textContent = snapshot.deviceName;
-  $("#device-meta").textContent = connected ? snapshot.profileLabel : stateText(snapshot.state);
+  $("#device-meta").textContent = connected ? `${snapshot.profileLabel} · синхронизировано` : stateText(snapshot.state);
   $("#status-dot").className = `status-dot ${connected ? "online" : busy ? "busy" : ""}`;
-  $("#connect").textContent = busy ? "Подключение…" : snapshot.state === "disconnected" ? "Подключить снова" : "Найти лампу";
+  $("#connect").textContent = busy ? "Подключение…" : snapshot.state === "disconnected" || snapshot.state === "paused" ? "Подключить снова" : "Найти лампу";
   ($("#connect") as HTMLButtonElement).disabled = busy;
-  $("#disconnect").classList.toggle("hidden", !connected);
+  $("#disconnect").classList.toggle("hidden", snapshot.state === "idle" || snapshot.state === "unsupported" || snapshot.state === "paused");
   connectedControls.forEach((control) => { control.disabled = !connected; });
   const addressable = snapshot.protocolKind !== "ble";
   $("#direction-row").classList.toggle("hidden", !addressable);
@@ -191,10 +207,30 @@ function updateConnection(snapshot: ControllerSnapshot) {
 }
 
 function stateText(state: ControllerSnapshot["state"]) {
-  return ({ unsupported: "Web Bluetooth недоступен", idle: "Готово к поиску", connecting: "Подключение…", connected: "Подключено", disconnected: "Соединение потеряно" })[state];
+  return ({ unsupported: "Web Bluetooth недоступен", idle: "Готово к поиску", connecting: "Подключение…", syncing: "Синхронизируем состояние…", connected: "Подключено", disconnected: "Соединение потеряно · повторяем автоматически", paused: "Отключено пользователем" })[state];
 }
 
-const controller = new BleLampController(updateConnection, addLog);
+async function restoreLampState() {
+  if (!hasControlledLamp || powerOn === null) return;
+  if (!powerOn) {
+    await controller.power(false);
+    return;
+  }
+  await controller.power(true);
+  await controller.brightness(Number($<HTMLInputElement>("#brightness").value));
+  if (activeMode === "effect") {
+    await controller.effect(activeEffect);
+    await controller.speed(Number($<HTMLInputElement>("#speed").value));
+    if (controller.addressable) await controller.direction(reverseDirection);
+  } else if (activeMode === "hardware-mic") {
+    await controller.hardwareMic(activeMicMode);
+  } else {
+    await controller.color(...currentColor());
+  }
+  addLog("Состояние лампы восстановлено");
+}
+
+const controller = new BleLampController(updateConnection, addLog, restoreLampState);
 
 function readSettings(): SavedSettings | undefined {
   try {
@@ -206,6 +242,7 @@ function readSettings(): SavedSettings | undefined {
 
 function saveSettings() {
   const settings: SavedSettings = {
+    version: 2,
     color: $<HTMLInputElement>("#color").value,
     brightness: $<HTMLInputElement>("#brightness").value,
     speed: $<HTMLInputElement>("#speed").value,
@@ -223,20 +260,26 @@ function saveSettings() {
 
 function restoreSettings() {
   const saved = readSettings();
-  if (!saved) return;
+  if (!saved) {
+    controller.setRgbOrder("GRB");
+    return;
+  }
   $<HTMLInputElement>("#color").value = saved.color || "#7c5cff";
   $<HTMLInputElement>("#brightness").value = saved.brightness || "80";
   $<HTMLInputElement>("#speed").value = saved.speed || "50";
   $<HTMLInputElement>("#sensitivity").value = saved.sensitivity || "15";
   $<HTMLSelectElement>("#protocol").value = saved.protocol || "auto";
-  $<HTMLSelectElement>("#rgb-order").value = saved.rgbOrder || "RGB";
+  const rgbOrder = saved.version === 2 ? (saved.rgbOrder || "GRB") : "GRB";
+  $<HTMLSelectElement>("#rgb-order").value = rgbOrder;
   $<HTMLInputElement>("#pixels").value = saved.pixels || "100";
   $("#color-value").textContent = $<HTMLInputElement>("#color").value.toUpperCase();
+  updateRgbReadout();
   $("#brightness-value").textContent = `${$<HTMLInputElement>("#brightness").value}%`;
   $("#speed-value").textContent = `${$<HTMLInputElement>("#speed").value}%`;
   $("#sensitivity-value").textContent = `${(Number($<HTMLInputElement>("#sensitivity").value) / 10).toFixed(1)}×`;
   controller.setForcedProtocol(saved.protocol || "auto");
-  controller.setRgbOrder(saved.rgbOrder || "RGB");
+  controller.setRgbOrder(rgbOrder);
+  saveSettings();
 }
 
 function showToast(message: string, error = false) {
@@ -251,6 +294,7 @@ async function run(action: () => Promise<unknown>, success?: string) {
     await action();
     if (success) showToast(success);
   } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") return;
     const message = error instanceof DOMException && error.name === "NotFoundError"
       ? "Выбор устройства отменён"
       : error instanceof Error ? error.message : String(error);
@@ -264,6 +308,19 @@ function hexToRgb(hex: string) {
 }
 
 function currentColor() { return hexToRgb(($<HTMLInputElement>("#color")).value); }
+
+function updateRgbReadout() {
+  const [red, green, blue] = currentColor();
+  $("#rgb-value").textContent = `${red} · ${green} · ${blue}`;
+  document.documentElement.style.setProperty("--lamp-color", $<HTMLInputElement>("#color").value);
+}
+
+function updatePowerUi() {
+  const isOn = powerOn === true;
+  $("#power").classList.toggle("on", isOn);
+  $("#power").setAttribute("aria-pressed", String(isOn));
+  $("#power-label").textContent = powerOn === null ? "Состояние не определено" : isOn ? "Включено" : "Выключено";
+}
 
 function populateEffects(addressable: boolean) {
   const select = $<HTMLSelectElement>("#effect");
@@ -305,15 +362,15 @@ all<HTMLButtonElement>(".tab").forEach((tab) => tab.addEventListener("click", ()
   all<HTMLElement>(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === tab.dataset.tab));
 }));
 
-$("#connect").addEventListener("click", () => void run(() => latestSnapshot?.state === "disconnected" ? controller.reconnect() : controller.connect(), "Лампа подключена"));
+$("#connect").addEventListener("click", () => void run(() => latestSnapshot?.state === "disconnected" || latestSnapshot?.state === "paused" ? controller.reconnect() : controller.connect(), "Лампа подключена"));
 $("#disconnect").addEventListener("click", () => controller.disconnect());
 
 $("#power").addEventListener("click", () => void run(async () => {
-  powerOn = !powerOn;
-  await controller.power(powerOn);
-  $("#power").classList.toggle("on", powerOn);
-  $("#power").setAttribute("aria-pressed", String(powerOn));
-  $("#power-label").textContent = powerOn ? "Включено" : "Выключено";
+  const nextPower = powerOn !== true;
+  await controller.power(nextPower);
+  powerOn = nextPower;
+  hasControlledLamp = true;
+  updatePowerUi();
 }));
 
 const colorInput = $<HTMLInputElement>("#color");
@@ -321,10 +378,12 @@ colorInput.addEventListener("input", throttledInput(async () => {
   const hex = colorInput.value.toUpperCase();
   $("#color-value").textContent = hex;
   $("#color-preview").setAttribute("style", `--selected-color:${hex}`);
+  updateRgbReadout();
+  activeMode = "color";
+  hasControlledLamp = true;
   await controller.color(...hexToRgb(hex));
   powerOn = true;
-  $("#power").classList.add("on");
-  $("#power-label").textContent = "Включено";
+  updatePowerUi();
   saveSettings();
 }));
 
@@ -338,11 +397,28 @@ function bindRange(selector: string, output: string, suffix: string, callback: (
   });
 }
 
-bindRange("#brightness", "#brightness-value", "%", (value) => controller.brightness(value));
-bindRange("#speed", "#speed-value", "%", (value) => controller.speed(value));
+bindRange("#brightness", "#brightness-value", "%", async (value) => {
+  hasControlledLamp = true;
+  await controller.brightness(value);
+});
+bindRange("#speed", "#speed-value", "%", async (value) => {
+  hasControlledLamp = true;
+  await controller.speed(value);
+});
 
-$("#apply-effect").addEventListener("click", () => void run(() => controller.effect(Number($<HTMLSelectElement>("#effect").value)), "Эффект запущен"));
-$("#direction").addEventListener("change", () => void run(() => controller.direction($<HTMLInputElement>("#direction").checked)));
+$("#apply-effect").addEventListener("click", () => void run(async () => {
+  activeEffect = Number($<HTMLSelectElement>("#effect").value);
+  activeMode = "effect";
+  hasControlledLamp = true;
+  await controller.effect(activeEffect);
+  powerOn = true;
+  updatePowerUi();
+}, "Эффект запущен"));
+$("#direction").addEventListener("change", () => void run(async () => {
+  reverseDirection = $<HTMLInputElement>("#direction").checked;
+  hasControlledLamp = true;
+  await controller.direction(reverseDirection);
+}));
 
 const sensitivity = $<HTMLInputElement>("#sensitivity");
 sensitivity.addEventListener("input", () => {
@@ -363,6 +439,10 @@ async function startMusic() {
     const data = new Uint8Array(analyser.frequencyBinCount);
     let lastSent = 0;
     musicRunning = true;
+    activeMode = "color";
+    hasControlledLamp = true;
+    powerOn = true;
+    updatePowerUi();
     $("#music-toggle").textContent = "Остановить светомузыку";
     const tick = (time: number) => {
       if (!musicRunning) return;
@@ -394,7 +474,14 @@ function stopMusic() {
   $("#level-meter i").removeAttribute("style");
 }
 
-all<HTMLButtonElement>(".mic-mode").forEach((button) => button.addEventListener("click", () => void run(() => controller.hardwareMic(Number(button.dataset.mode)), "Режим микрофона включён")));
+all<HTMLButtonElement>(".mic-mode").forEach((button) => button.addEventListener("click", () => void run(async () => {
+  activeMicMode = Number(button.dataset.mode);
+  activeMode = "hardware-mic";
+  hasControlledLamp = true;
+  await controller.hardwareMic(activeMicMode);
+  powerOn = true;
+  updatePowerUi();
+}, "Режим микрофона включён")));
 
 $("#timer-start").addEventListener("click", () => {
   const minutes = Math.max(1, Math.min(1440, Number($<HTMLInputElement>("#timer-minutes").value) || 1));
@@ -412,10 +499,12 @@ function updateTimer() {
   const left = timerDeadline - Date.now();
   if (left <= 0) {
     cancelTimer();
-    void run(() => controller.power(false), "Лампа выключена по таймеру");
-    powerOn = false;
-    $("#power").classList.remove("on");
-    $("#power-label").textContent = "Выключено";
+    void run(async () => {
+      await controller.power(false);
+      powerOn = false;
+      hasControlledLamp = true;
+      updatePowerUi();
+    }, "Лампа выключена по таймеру");
     return;
   }
   const totalSeconds = Math.ceil(left / 1000);
@@ -435,10 +524,18 @@ function cancelTimer() {
 $<HTMLSelectElement>("#protocol").addEventListener("change", (event) => {
   controller.setForcedProtocol((event.target as HTMLSelectElement).value as ProtocolKind | "auto");
   saveSettings();
+  if (controller.connected) void run(restoreLampState, "Протокол применён");
 });
 $<HTMLSelectElement>("#rgb-order").addEventListener("change", (event) => {
   controller.setRgbOrder((event.target as HTMLSelectElement).value as RgbOrder);
   saveSettings();
+  if (controller.connected) void run(async () => {
+    activeMode = "color";
+    hasControlledLamp = true;
+    await controller.color(...currentColor());
+    powerOn = true;
+    updatePowerUi();
+  }, "Порядок каналов применён");
 });
 $<HTMLInputElement>("#pixels").addEventListener("change", saveSettings);
 $("#apply-strip").addEventListener("click", () => void run(() => {
@@ -446,6 +543,20 @@ $("#apply-strip").addEventListener("click", () => void run(() => {
   const order = $<HTMLSelectElement>("#rgb-order").selectedIndex + 1;
   return controller.stripConfig(pixels, order);
 }, "Настройки отправлены"));
+
+all<HTMLButtonElement>(".channel-test").forEach((button) => button.addEventListener("click", () => void run(async () => {
+  const color = button.dataset.color ?? "#ffffff";
+  $<HTMLInputElement>("#color").value = color;
+  $("#color-value").textContent = color.toUpperCase();
+  $("#color-preview").setAttribute("style", `--selected-color:${color}`);
+  updateRgbReadout();
+  activeMode = "color";
+  hasControlledLamp = true;
+  await controller.color(...hexToRgb(color));
+  powerOn = true;
+  updatePowerUi();
+  saveSettings();
+}, `${button.textContent} канал отправлен`)));
 
 $("#clear-log").addEventListener("click", () => logElement.replaceChildren());
 
@@ -457,6 +568,8 @@ dialog.addEventListener("click", (event) => { if (event.target === dialog) dialo
 $("#browser-warning").classList.toggle("hidden", Boolean(navigator.bluetooth));
 restoreSettings();
 $("#color-preview").setAttribute("style", `--selected-color:${$<HTMLInputElement>("#color").value}`);
+updateRgbReadout();
+updatePowerUi();
 
 registerSW({
   onNeedRefresh() { showToast("Доступна новая версия — обновите страницу"); },

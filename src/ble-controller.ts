@@ -4,7 +4,7 @@ const SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb";
 const CHARACTERISTIC_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb";
 const WRITE_INTERVAL_MS = 45;
 
-export type ConnectionState = "unsupported" | "idle" | "connecting" | "connected" | "disconnected";
+export type ConnectionState = "unsupported" | "idle" | "connecting" | "syncing" | "connected" | "disconnected" | "paused";
 
 export interface ControllerSnapshot {
   state: ConnectionState;
@@ -24,16 +24,23 @@ export class BleLampController {
   private writeTail = Promise.resolve();
   private lastWriteAt = 0;
   private forcedKind: ProtocolKind | "auto" = "auto";
+  private manualDisconnect = false;
+  private reconnectTimer = 0;
+  private reconnectAttempt = 0;
+  private session = 0;
 
   constructor(
     private readonly onState: StateListener,
     private readonly onLog: LogListener,
+    private readonly onRestore: () => Promise<void> = async () => undefined,
   ) {
     this.emitState();
   }
 
   get connected() {
-    return this.state === "connected" && Boolean(this.characteristic);
+    return (this.state === "connected" || this.state === "syncing")
+      && Boolean(this.characteristic)
+      && Boolean(this.device?.gatt?.connected);
   }
 
   get kind() {
@@ -61,6 +68,8 @@ export class BleLampController {
 
   async connect() {
     if (!navigator.bluetooth) throw new Error("Web Bluetooth недоступен в этом браузере");
+    this.manualDisconnect = false;
+    window.clearTimeout(this.reconnectTimer);
     this.setState("connecting");
     try {
       this.device = await navigator.bluetooth.requestDevice({
@@ -72,25 +81,33 @@ export class BleLampController {
       await this.openGatt();
     } catch (error) {
       this.setState(this.device ? "disconnected" : "idle");
+      if (this.device && !this.manualDisconnect) this.scheduleReconnect();
       throw error;
     }
   }
 
   async reconnect() {
     if (!this.device) return this.connect();
+    this.manualDisconnect = false;
+    window.clearTimeout(this.reconnectTimer);
     this.setState("connecting");
     try {
       await this.openGatt();
     } catch (error) {
       this.setState("disconnected");
+      if (!this.manualDisconnect) this.scheduleReconnect();
       throw error;
     }
   }
 
   disconnect() {
+    this.manualDisconnect = true;
+    window.clearTimeout(this.reconnectTimer);
+    this.session += 1;
+    this.writeTail = Promise.resolve();
     this.device?.gatt?.disconnect();
     this.characteristic = undefined;
-    this.setState("disconnected");
+    this.setState("paused");
   }
 
   power(on: boolean) { return this.write(this.protocol.power(on)); }
@@ -107,6 +124,11 @@ export class BleLampController {
     if (!server) throw new Error("Не удалось открыть Bluetooth-соединение");
     const service = await server.getPrimaryService(SERVICE_UUID);
     this.characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+    this.session += 1;
+    this.writeTail = Promise.resolve();
+    this.reconnectAttempt = 0;
+    this.setState("syncing");
+    await this.onRestore();
     this.setState("connected");
     this.onLog(`Подключено: ${this.device?.name ?? "без имени"}`);
   }
@@ -121,12 +143,14 @@ export class BleLampController {
   }
 
   private write(frame: Uint8Array) {
+    const queuedSession = this.session;
     this.writeTail = this.writeTail.catch(() => undefined).then(async () => {
+      if (queuedSession !== this.session) throw new DOMException("Устаревшая команда отменена", "AbortError");
       if (!this.characteristic || !this.connected) throw new Error("Лампа не подключена");
       const wait = Math.max(0, WRITE_INTERVAL_MS - (Date.now() - this.lastWriteAt));
       if (wait) await new Promise((resolve) => window.setTimeout(resolve, wait));
       const payload = new Uint8Array(frame);
-      if (this.characteristic.writeValueWithoutResponse) {
+      if (this.characteristic.properties.writeWithoutResponse) {
         await this.characteristic.writeValueWithoutResponse(payload);
       } else {
         await this.characteristic.writeValue(payload);
@@ -134,17 +158,46 @@ export class BleLampController {
       this.lastWriteAt = Date.now();
       this.onLog(`TX ${bytesToHex(frame)}`);
     }).catch((error: unknown) => {
-      this.onLog(`Ошибка записи: ${error instanceof Error ? error.message : String(error)}`);
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        this.onLog(`Ошибка записи: ${error instanceof Error ? error.message : String(error)}`);
+      }
       throw error;
     });
     return this.writeTail;
   }
 
   private handleDisconnect = () => {
+    this.session += 1;
+    this.writeTail = Promise.resolve();
     this.characteristic = undefined;
-    this.setState("disconnected");
-    this.onLog("Bluetooth-соединение разорвано");
+    if (this.manualDisconnect) {
+      this.setState("paused");
+      this.onLog("Лампа отключена пользователем");
+    } else {
+      this.setState("disconnected");
+      this.onLog("Bluetooth-соединение разорвано");
+      this.scheduleReconnect();
+    }
   };
+
+  private scheduleReconnect() {
+    window.clearTimeout(this.reconnectTimer);
+    const delay = Math.min(10_000, 800 * 2 ** this.reconnectAttempt);
+    this.reconnectAttempt += 1;
+    this.onLog(`Повторное подключение через ${(delay / 1000).toFixed(1)} с`);
+    this.reconnectTimer = window.setTimeout(async () => {
+      if (this.manualDisconnect || !this.device) return;
+      this.setState("connecting");
+      try {
+        await this.openGatt();
+      } catch (error) {
+        this.characteristic = undefined;
+        this.setState("disconnected");
+        this.onLog(`Переподключение не удалось: ${error instanceof Error ? error.message : String(error)}`);
+        this.scheduleReconnect();
+      }
+    }, delay);
+  }
 
   private setState(state: ConnectionState) {
     this.state = state;

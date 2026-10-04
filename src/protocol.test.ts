@@ -14,7 +14,7 @@ describe("detectProfile", () => {
 
 describe("LedProtocol", () => {
   it("builds LEDBLE power and color frames", () => {
-    const protocol = new LedProtocol("ble");
+    const protocol = new LedProtocol("ble", "RGB");
     expect(bytes(protocol.power(true))).toEqual([0x7e, 0xff, 0x04, 1, 0xff, 0xff, 0xff, 0xff, 0xef]);
     expect(bytes(protocol.color(255, 16, 0))).toEqual([0x7e, 0xff, 0x05, 0x03, 255, 16, 0, 0xff, 0xef]);
   });
@@ -24,8 +24,13 @@ describe("LedProtocol", () => {
     expect(bytes(protocol.color(1, 2, 3)).slice(4, 7)).toEqual([2, 1, 3]);
   });
 
+  it("uses the common GRB wiring order by default", () => {
+    const protocol = new LedProtocol("ble");
+    expect(bytes(protocol.color(10, 20, 30)).slice(4, 7)).toEqual([20, 10, 30]);
+  });
+
   it("builds regular DMX frames", () => {
-    const protocol = new LedProtocol("dmx");
+    const protocol = new LedProtocol("dmx", "RGB");
     expect(bytes(protocol.color(1, 2, 3))).toEqual([0x7b, 0xff, 0x07, 1, 2, 3, 0, 0xff, 0xbf]);
     expect(bytes(protocol.brightness(50))).toEqual([0x7b, 0xff, 0x01, 16, 50, 1, 0xff, 0xff, 0xbf]);
     expect(bytes(protocol.effect(255))).toEqual([0x7b, 0xff, 0x03, 255, 0xff, 0xff, 0xff, 0xff, 0xbf]);
@@ -38,7 +43,7 @@ describe("LedProtocol", () => {
   });
 
   it("clamps unsafe values", () => {
-    const protocol = new LedProtocol("ble");
+    const protocol = new LedProtocol("ble", "RGB");
     expect(bytes(protocol.brightness(500))[3]).toBe(100);
     expect(bytes(protocol.color(-5, 270, 12.4)).slice(4, 7)).toEqual([0, 255, 12]);
   });
