@@ -29,7 +29,7 @@ function orderedRgb(red: number, green: number, blue: number, order: RgbOrder) {
 export class LedProtocol {
   constructor(
     public readonly kind: ProtocolKind,
-    public rgbOrder: RgbOrder = "GRB",
+    public rgbOrder: RgbOrder = "RGB",
   ) {}
 
   get addressable() {

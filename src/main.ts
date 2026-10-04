@@ -115,7 +115,7 @@ app.innerHTML = `
           <option value="dmx-shifted">LEDDMX 02/04 / новый формат</option>
         </select></label>
         <label class="field"><span>Порядок цветов</span><select id="rgb-order">
-          <option>RGB</option><option>RBG</option><option selected>GRB</option><option>GBR</option><option>BRG</option><option>BGR</option>
+          <option selected>RGB</option><option>RBG</option><option>GRB</option><option>GBR</option><option>BRG</option><option>BGR</option>
         </select></label>
         <div class="calibration">
           <span class="eyebrow">Проверка каналов</span>
@@ -137,7 +137,7 @@ app.innerHTML = `
         <button id="clear-log" class="text-button">Очистить журнал</button>
       </details>
       <section class="card about">
-        <strong>Luma BLE <span>v0.2.0</span></strong>
+        <strong>Luma BLE <span>v0.2.1</span></strong>
         <p>Работает локально. Команды и звук не отправляются на сервер.</p>
       </section>
     </div>
@@ -242,7 +242,7 @@ function readSettings(): SavedSettings | undefined {
 
 function saveSettings() {
   const settings: SavedSettings = {
-    version: 2,
+    version: 3,
     color: $<HTMLInputElement>("#color").value,
     brightness: $<HTMLInputElement>("#brightness").value,
     speed: $<HTMLInputElement>("#speed").value,
@@ -261,7 +261,7 @@ function saveSettings() {
 function restoreSettings() {
   const saved = readSettings();
   if (!saved) {
-    controller.setRgbOrder("GRB");
+    controller.setRgbOrder("RGB");
     return;
   }
   $<HTMLInputElement>("#color").value = saved.color || "#7c5cff";
@@ -269,7 +269,7 @@ function restoreSettings() {
   $<HTMLInputElement>("#speed").value = saved.speed || "50";
   $<HTMLInputElement>("#sensitivity").value = saved.sensitivity || "15";
   $<HTMLSelectElement>("#protocol").value = saved.protocol || "auto";
-  const rgbOrder = saved.version === 2 ? (saved.rgbOrder || "GRB") : "GRB";
+  const rgbOrder = saved.version === 3 ? (saved.rgbOrder || "RGB") : "RGB";
   $<HTMLSelectElement>("#rgb-order").value = rgbOrder;
   $<HTMLInputElement>("#pixels").value = saved.pixels || "100";
   $("#color-value").textContent = $<HTMLInputElement>("#color").value.toUpperCase();

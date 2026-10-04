@@ -24,9 +24,9 @@ describe("LedProtocol", () => {
     expect(bytes(protocol.color(1, 2, 3)).slice(4, 7)).toEqual([2, 1, 3]);
   });
 
-  it("uses the common GRB wiring order by default", () => {
+  it("uses RGB wiring order by default", () => {
     const protocol = new LedProtocol("ble");
-    expect(bytes(protocol.color(10, 20, 30)).slice(4, 7)).toEqual([20, 10, 30]);
+    expect(bytes(protocol.color(10, 20, 30)).slice(4, 7)).toEqual([10, 20, 30]);
   });
 
   it("builds regular DMX frames", () => {
